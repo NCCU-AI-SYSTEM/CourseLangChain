@@ -1,0 +1,13 @@
+services:
+  courselangchain:
+    build:
+      args:
+        PROJECT_PATH: /course-langchain
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - MODEL=${MODEL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python main.py

@@ -1,4 +1,4 @@
-from langchain.retrievers import EnsembleRetriever as OriginEnsembleRetriever
+from langchain_classic.retrievers.ensemble import EnsembleRetriever as OriginEnsembleRetriever
 from typing import Any, Dict, List
 
 from langchain.callbacks.manager import (

@@ -1,4 +1,4 @@
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts.prompt import PromptTemplate
 
 
 def get_prompt():
