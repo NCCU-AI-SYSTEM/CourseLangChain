@@ -1,13 +1,13 @@
 from langchain_classic.retrievers.ensemble import EnsembleRetriever as OriginEnsembleRetriever
 from typing import Any, Dict, List
 
-from langchain.callbacks.manager import (
+from langchain_core.callbacks.manager import (
     AsyncCallbackManagerForRetrieverRun,
     CallbackManagerForRetrieverRun,
 )
 #from langchain.pydantic.v1 import root_validator
-from pydantic import root_validator
-from langchain.schema import BaseRetriever, Document
+# from pydantic import root_validator
+from langchain_core.retrievers import BaseRetriever, Document
 
 class EnsembleRetriever(OriginEnsembleRetriever):
   def _get_relevant_documents(

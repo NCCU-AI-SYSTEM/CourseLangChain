@@ -19,5 +19,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "faiss-cpu>=1.13.2",
+    "langchain-huggingface>=1.2.1",
     "langsmith>=0.7.17",
+    "torch>=2.10.0",
 ]
