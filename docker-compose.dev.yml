@@ -1,0 +1,17 @@
+name: course-langchain-dev
+services:
+  courselangchain:
+    build:
+      args:
+        PROJECT_PATH: /course-langchain
+      target: dev
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - MODEL=${MODEL}
+    volumes:
+      - .:/course-langchain
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["sleep", "infinity"]

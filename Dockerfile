@@ -29,6 +29,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+#################################################################################
+
+FROM base AS dev
+ARG DEBIAN_FRONTEND=noninteractive
+    # Copy from the cache instead of linking since it's a mounted volume
+ENV UV_LINK_MODE=copy \
+    # uv
+    UV_CACHE_DIR="/root/.cache/uv"
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install --no-install-recommends -y \
+        # useful tools
+        git vim wget curl ca-certificates build-essential tmux
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR ${PROJECT_PATH}
+
+CMD ["sleep", "infinity"]
+
 ################################################################################
 
 FROM base AS prod-prepare
