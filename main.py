@@ -12,7 +12,7 @@ from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from utils.prompt import get_prompt
 
 # Load env
-load_dotenv()
+load_dotenv(override=True)
 
 MODEL = os.getenv("MODEL")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")

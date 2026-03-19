@@ -8,6 +8,15 @@ services:
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - MODEL=${MODEL}
+    ports:
+      - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: python main.py
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    command: ["python", "app.py"]
