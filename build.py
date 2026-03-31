@@ -1,12 +1,14 @@
+import sys
 import sqlite3, pickle, json
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-from langchain.vectorstores.faiss import FAISS
-from langchain.retrievers.bm25 import BM25Retriever
-from langchain.schema import Document
+from langchain_huggingface.embeddings.huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents.base import Document
 from utils.time import getSessionArray, weekdayCode
 from utils.retriever import EnsembleRetriever
 
 import torch
+
 
 class ClassDocument(Document):
   def __init__(self, content: dict) -> None:
@@ -38,12 +40,12 @@ def dict_factory(cursor, row):
 def document_factory(cursor, row):
   return ClassDocument(dict_factory(cursor, row))
 
-def build(dataFile="data.db", vectorStorePkl="vectorstore.pkl", embeddingModel="BAAI/bge-m3"):
+def build(y: str, s: str, dataFile="data.db", vectorStorePkl="vectorstore.pkl", embeddingModel="BAAI/bge-m3"):
   con = sqlite3.connect(dataFile)
   con.row_factory = document_factory
   cursor = con.cursor()
   
-  req = cursor.execute("SELECT * FROM COURSE WHERE y = 112 AND s = 1")
+  req = cursor.execute("SELECT * FROM COURSE WHERE y = ? AND s = ?", (y, s))
   res = req.fetchall()
   
   if(torch.cuda.is_available()):
@@ -73,4 +75,8 @@ def build(dataFile="data.db", vectorStorePkl="vectorstore.pkl", embeddingModel="
       
 
 if __name__ == "__main__":
-  build()
+  if len(sys.argv) != 3:
+    print("Usage: python build.py <year> <semester>")
+    print("Example: python build.py 113 1")
+    sys.exit(1)
+  build(sys.argv[1], sys.argv[2])

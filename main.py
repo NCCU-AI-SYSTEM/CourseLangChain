@@ -1,17 +1,21 @@
-import logging, pickle
+import logging
+import pickle
 import fire
+import os
+from dotenv import load_dotenv
+
+from langchain_ollama import OllamaLLM
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.llms import Ollama
+from langchain_classic.retrievers.ensemble import EnsembleRetriever
+
 from utils.prompt import get_prompt
-from langchain.retrievers import EnsembleRetriever
-from dotenv import load_dotenv
-import os
 
-# remember to add the .env file in order to use Langsmith API
-load_dotenv()
+# Load env
+load_dotenv(override=True)
 
-MODAL = os.getenv("MODEL")
+MODEL = os.getenv("MODEL")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 logger = logging.getLogger("CourseLangchain")
 logger.setLevel(logging.DEBUG)
@@ -37,8 +41,12 @@ class CourseLangChain:
 
         with open(pickleFile, "rb") as f:
             retriever: EnsembleRetriever = pickle.load(f)
-        
-        model = Ollama(model=MODAL, stop=["<|eot_id|>"])
+
+        model = OllamaLLM(
+            model=MODEL,
+            base_url=OLLAMA_HOST,
+            stop=["<|eot_id|>"],
+        )
 
         def format_docs(docs):
             return "\n".join(f"- {doc.page_content}" for doc in docs)
