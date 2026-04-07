@@ -8,10 +8,16 @@ services:
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - MODEL=${MODEL}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
     ports:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      langfuse-web:
+        condition: service_started
     # deploy:
     #   resources:
     #     reservations:
@@ -19,4 +25,4 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
-    command: ["python", "app.py"]
+    command: ["bash", "-c", "python build.py 114 2 && python app.py"]
