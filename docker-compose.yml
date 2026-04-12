@@ -9,6 +9,9 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - MODEL=${MODEL}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
     ports:
       - "8000:8000"
     extra_hosts:
