@@ -1,8 +1,29 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 import json
+import os
+from dotenv import load_dotenv
+
+from langfuse import get_client
+from langfuse.langchain import CallbackHandler
+
+load_dotenv(override=True)
+
+os.environ.setdefault(
+    "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
+)
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", os.getenv("LANGFUSE_PUBLIC_KEY") or "")
+os.environ.setdefault("LANGFUSE_SECRET_KEY", os.getenv("LANGFUSE_SECRET_KEY") or "")
 
 app = FastAPI()
+
+public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+if public_key and secret_key:
+    langfuse_handler = CallbackHandler()
+    print(f"Langfuse tracing enabled: {os.getenv('LANGFUSE_BASE_URL')}")
+else:
+    langfuse_handler = None
 
 
 async def generate_streaming(question: str):
@@ -20,6 +41,8 @@ async def generate_streaming(question: str):
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
+    if langfuse_handler:
+        get_client().flush()
     yield f"data: {json.dumps({'data': 'SPECIAL_END_TOKEN'})}\n\n"
 
 
@@ -33,6 +56,9 @@ async def generate_non_streaming(question: str):
         yield f"data: {json.dumps({'data': result})}\n\n"
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    if langfuse_handler:
+        get_client().flush()
     yield f"data: {json.dumps({'data': 'SPECIAL_END_TOKEN'})}\n\n"
 
 
