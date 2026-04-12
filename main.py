@@ -76,27 +76,30 @@ class CourseLangGraph:
         )
 
         async for event in self.streaming_agent.astream_events(
-            initial_state,
-            config=config,
+            initial_state, config=config, version="v2"
         ):
             event_type = event.get("event", "")
             metadata = event.get("metadata", {})
             node_name = metadata.get("langgraph_node", "")
 
-            if event_type == "on_llm_stream" and node_name == "respond":
-                data = event.get("data", {})
-                chunk = data.get("chunk", {})
+            if event_type in ("on_chat_model_stream", "on_llm_stream"):
+                if node_name == "respond":
+                    data = event.get("data", {})
+                    chunk = data.get("chunk", {})
 
-                content = None
-                if hasattr(chunk, "content"):
-                    content = chunk.content
-                elif hasattr(chunk, "text"):
-                    content = chunk.text
-                elif isinstance(chunk, dict):
-                    content = chunk.get("content") or chunk.get("text")
+                    content = None
+                    if hasattr(chunk, "content"):
+                        content = chunk.content
+                    elif hasattr(chunk, "text"):
+                        content = chunk.text
+                    elif isinstance(chunk, dict):
+                        content = chunk.get("content") or chunk.get("text")
 
-                if content:
-                    yield content
+                    if content:
+                        yield content
+            elif event_type == "on_chain_end" and node_name == "":
+                logger.info("Graph execution completed")
+                break
 
 
 async def main():

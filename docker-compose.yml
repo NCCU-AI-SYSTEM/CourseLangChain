@@ -12,6 +12,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
+      - USE_GOOGLE_AI=${USE_GOOGLE_AI}
     ports:
       - "8000:8000"
     extra_hosts:

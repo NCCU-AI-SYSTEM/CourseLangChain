@@ -9,3 +9,5 @@ vectordb*/
 model
 uploads
 .DS_Store
+
+trace*.json

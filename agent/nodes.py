@@ -198,6 +198,29 @@ def retrieve(state: AgentState) -> AgentState:
     }
 
 
+def sql_to_human_readable(sql_filter):
+    if not sql_filter:
+        return "無"
+
+    day_map = {
+        "一": "星期一",
+        "二": "星期二",
+        "三": "星期三",
+        "四": "星期四",
+        "五": "星期五",
+        "六": "星期六",
+        "日": "星期日",
+    }
+
+    for day_char, day_name in day_map.items():
+        if f"'{day_char}'" in sql_filter:
+            if "<>" in sql_filter or "!=" in sql_filter:
+                return f"排除{day_name}的課程"
+            else:
+                return f"只有{day_name}的課程"
+    return f"時間條件：{sql_filter}"
+
+
 async def astream_respond(state: AgentState) -> AsyncIterator[dict]:
     """Streaming version of respond node - yields chunks as they come."""
     user_input = state["user_input"]
@@ -205,23 +228,29 @@ async def astream_respond(state: AgentState) -> AsyncIterator[dict]:
     sql_filter = state.get("sql_filter")
     messages = state.get("messages", [])
 
-    response_prompt = f"""你是課程查詢系統的助理。
+    time_condition = sql_to_human_readable(sql_filter)
 
-用戶需求：{user_input}
+    response_prompt = f"""You are an assistant for question-answering tasks. 
+Use the following pieces of retrieved context to answer the question. Create a table that lists course schedule.
+The table should have three columns (in Chinese): 課程名稱, 上課時間, 授課老師. Please align the entries to the left.
+Remember to respond with a table, and NOTHING else.
 
-時間過濾條件：{sql_filter if sql_filter else "無"}
+【重要規則 - IMPORTANT】
+1. You MUST ONLY use the retrieved courses below. DO NOT generate or invent any course names.
+2. If no courses are retrieved, reply: 「抱歉，沒有找到符合條件的課程」
+3. NEVER fabricate any course name, time, or teacher.
 
-檢索到的課程：
+User Question: {user_input}
+
+Time Filter: {time_condition}
+
+Retrieved Courses:
 {courses}
 
-請將課程整理成表格格式：
+Please create a table with the retrieved courses:
 | 課程名稱 | 上課時間 | 授課老師 |
 |----------|----------|----------|
 | ...      | ...      | ...      |
-
-如果找不到課程，請說明原因。
-
-請用繁體中文回應。
 """
 
     llm = get_respond_llm()
@@ -245,23 +274,29 @@ def respond(state: AgentState) -> AgentState:
     sql_filter = state.get("sql_filter")
     messages = state.get("messages", [])
 
-    response_prompt = f"""你是課程查詢系統的助理。
+    time_condition = sql_to_human_readable(sql_filter)
 
-用戶需求：{user_input}
+    response_prompt = f"""You are an assistant for question-answering tasks. 
+Use the following pieces of retrieved context to answer the question. Create a table that lists course schedule.
+The table should have three columns (in Chinese): 課程名稱, 上課時間, 授課老師. Please align the entries to the left.
+Remember to respond with a table, and NOTHING else.
 
-時間過濾條件：{sql_filter if sql_filter else "無"}
+【重要規則 - IMPORTANT】
+1. You MUST ONLY use the retrieved courses below. DO NOT generate or invent any course names.
+2. If no courses are retrieved, reply: 「抱歉，沒有找到符合條件的課程」
+3. NEVER fabricate any course name, time, or teacher.
 
-檢索到的課程：
+User Question: {user_input}
+
+Time Filter: {time_condition}
+
+Retrieved Courses:
 {courses}
 
-請將課程整理成表格格式：
+Please create a table with the retrieved courses:
 | 課程名稱 | 上課時間 | 授課老師 |
 |----------|----------|----------|
 | ...      | ...      | ...      |
-
-如果找不到課程，請說明原因。
-
-請用繁體中文回應。
 """
 
     llm = get_respond_llm()
