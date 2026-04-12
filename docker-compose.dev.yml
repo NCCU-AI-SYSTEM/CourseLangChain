@@ -1,6 +1,6 @@
 name: course-langchain-dev
 services:
-  CourseLangGraph:
+  courselanggraph:
     build:
       args:
         PROJECT_PATH: /course-langchain
