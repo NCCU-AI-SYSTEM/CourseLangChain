@@ -623,7 +623,7 @@ request:
 建議把後端拆成：
 
 ```text
-CourseLangChain/
+CourseLangGraph/
   agents/
     brain_agent.py
     planner_agent.py

@@ -1,9 +1,9 @@
 import streamlit as st
-from main import CourseLangChain
+from main import CourseLangGraph
 
 @st.cache_resource
 def initChain():
-    return CourseLangChain()
+    return CourseLangGraph()
 
 st.title("🦜🔗 Langchain Quickstart App")
 

@@ -1,23 +1,14 @@
 import logging
-import pickle
 import fire
 import os
 from dotenv import load_dotenv
 
-from langchain_ollama import OllamaLLM
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from langchain_classic.retrievers.ensemble import EnsembleRetriever
+from agent.graph import graph, streaming_graph
+from agent.state import AgentState
 
-from utils.prompt import get_prompt
-
-# Load env
 load_dotenv(override=True)
 
-MODEL = os.getenv("MODEL")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-
-logger = logging.getLogger("CourseLangchain")
+logger = logging.getLogger("CourseLangGraph")
 logger.setLevel(logging.DEBUG)
 
 ch = logging.StreamHandler()
@@ -28,48 +19,72 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
-class CourseLangChain:
-    def __init__(
-        self,
-        pickleFile="vectorstore.pkl",
-        cli=False,
-    ) -> None:
+def create_initial_state(user_input: str) -> AgentState:
+    return {
+        "user_input": user_input,
+        "needs_sql": False,
+        "sql_filter": None,
+        "sql_thoughts": "",
+        "sql_validation": True,
+        "sql_validation_msg": "",
+        "sql_retry_count": 0,
+        "courses": None,
+        "retrieval_thoughts": "",
+        "final_response": "",
+        "messages": [],
+    }
 
-        # Model Name Defination
-        prompt = get_prompt()
-        # logger.info("Prompt Template:\n" + prompt)
 
-        with open(pickleFile, "rb") as f:
-            retriever: EnsembleRetriever = pickle.load(f)
+class CourseLangGraph:
+    def __init__(self, cli=False) -> None:
+        self.agent = graph
+        self.streaming_agent = streaming_graph
+        logger.info("Agent ready.")
 
-        model = OllamaLLM(
-            model=MODEL,
-            base_url=OLLAMA_HOST,
-            stop=["<|eot_id|>"],
-        )
+    def invoke(self, user_input: str) -> str:
+        """Synchronous invoke - returns complete response."""
+        initial_state = create_initial_state(user_input)
+        result = self.agent.invoke(initial_state)
+        return result.get("final_response", "")
 
-        def format_docs(docs):
-            return "\n".join(f"- {doc.page_content}" for doc in docs)
+    async def astream(self, user_input: str):
+        """Async streaming invoke using LangGraph stream events."""
+        initial_state = create_initial_state(user_input)
 
-        self.chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | model
-            | StrOutputParser()
-        )
-        logger.info("Chain ready.")
+        async for event in self.streaming_agent.astream_events(
+            initial_state,
+            config={"recursion_limit": 50},
+        ):
+            event_type = event.get("event", "")
+            metadata = event.get("metadata", {})
+            node_name = metadata.get("langgraph_node", "")
 
-    def invoke(self, input) -> str:
-        return self.chain.invoke(input)
+            if event_type == "on_llm_stream" and node_name == "respond":
+                data = event.get("data", {})
+                chunk = data.get("chunk", {})
+
+                content = None
+                if hasattr(chunk, "content"):
+                    content = chunk.content
+                elif hasattr(chunk, "text"):
+                    content = chunk.text
+                elif isinstance(chunk, dict):
+                    content = chunk.get("content") or chunk.get("text")
+
+                if content:
+                    yield content
 
 
 async def main():
-    chain = CourseLangChain(cli=True)
+    agent = CourseLangGraph(cli=True)
     while True:
-        query = input("User:")
+        query = input("User: ")
+        if query.lower() in ["exit", "quit", "q"]:
+            break
         print("Bot:")
-        async for chunk in chain.chain.astream(query):
-            print(chunk, end="", flush=True)
+        result = agent.invoke(query)
+        print(result)
+        print()
 
 
 if __name__ == "__main__":

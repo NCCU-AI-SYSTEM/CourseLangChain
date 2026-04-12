@@ -1,5 +1,5 @@
 services:
-  courselangchain:
+  CourseLangGraph:
     build:
       args:
         PROJECT_PATH: /course-langchain
@@ -8,6 +8,7 @@ services:
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - MODEL=${MODEL}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     ports:
       - "8000:8000"
     extra_hosts:
@@ -19,4 +20,4 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
-    command: ["python", "app.py"]
+    command: ["bash", "-c", "python build.py 114 2 && python app.py"]

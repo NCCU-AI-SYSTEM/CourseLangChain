@@ -1,10 +1,10 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-  "name": "CourseLangChain",
+  "name": "CourseLangGraph",
   "dockerComposeFile": "../docker-compose.dev.yml",
   // The service vscode connects to
-  "service": "courselangchain",
+  "service": "CourseLangGraph",
   "workspaceFolder": "/course-langchain",
   "overrideCommand": true,
   // Variables used in all of the container. Rebuild is required if you want to modify
