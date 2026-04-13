@@ -1,10 +1,10 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-  "name": "CourseLangGraph",
+  "name": "CourseLangGraph Dev Container",
   "dockerComposeFile": "../docker-compose.dev.yml",
   // The service vscode connects to
-  "service": "CourseLangGraph",
+  "service": "courselanggraph",
   "workspaceFolder": "/course-langchain",
   "overrideCommand": true,
   // Variables used in all of the container. Rebuild is required if you want to modify
@@ -16,7 +16,7 @@
   //   "GIT_AUTH_TOKEN": "${localEnv:GIT_AUTH_TOKEN}"
   // },
   // "onCreateCommand": "",
-  // "postCreateCommand": ".devcontainer/postCreateCommand.sh",
+  "postCreateCommand": "uv sync",
   // "postStartCommand": "",
   // "postAttachCommand": {}
   "customizations": {

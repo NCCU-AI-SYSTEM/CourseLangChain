@@ -1,10 +1,11 @@
-from langchain_core.tools import tool
-from typing import Optional
 import pickle
 import sqlite3
-from langchain_classic.retrievers.ensemble import EnsembleRetriever
+from typing import Optional
+
 from langchain_classic.retrievers.bm25 import BM25Retriever
+from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from langchain_core.documents import Document
+from langchain_core.tools import tool
 
 
 @tool

@@ -1,11 +1,16 @@
+import asyncio
 import os
 import sqlite3
-import asyncio
-from langchain_ollama import OllamaLLM, ChatOllama
+from typing import AsyncIterator, Literal, Union
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-from typing import Literal, AsyncIterator, Union
+from langchain_ollama import ChatOllama, OllamaLLM
+
 from .state import AgentState
+
+load_dotenv(override=True)
 
 MODEL = os.getenv("MODEL")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -116,7 +121,6 @@ def sql_gen(state: AgentState) -> AgentState:
 
     if state["needs_sql"]:
         sql_result = text_to_sql_tool.invoke({"user_input": user_input})
-
 
         return {
             "sql_filter": sql_result,
