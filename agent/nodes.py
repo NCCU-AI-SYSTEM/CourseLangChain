@@ -117,22 +117,10 @@ def sql_gen(state: AgentState) -> AgentState:
     if state["needs_sql"]:
         sql_result = text_to_sql_tool.invoke({"user_input": user_input})
 
-        reflect_prompt = f"""請反思以下 SQL 是否正確：
-
-生成的 SQL：{sql_result}
-
-檢查項目：
-1. 語法：GLOB/LIKE 使用是否正確？
-2. 邏輯：「不要星期三」是否轉換為 NOT time GLOB '*三*'？
-3. 完整性：是否涵蓋用戶所有限制？
-
-反思："""
-
-        reflection = llm.invoke(reflect_prompt)
 
         return {
             "sql_filter": sql_result,
-            "sql_thoughts": f"生成 SQL: {sql_result}\n反思: {reflection}",
+            "sql_thoughts": f"生成 SQL: {sql_result}",
             "sql_retry_count": state.get("sql_retry_count", 0) + 1,
             "messages": messages + [ToolMessage(content=sql_result, tool_call_id="")],
         }
