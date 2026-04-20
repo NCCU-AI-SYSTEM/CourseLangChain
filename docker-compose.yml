@@ -24,4 +24,4 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
-    command: ["bash", "-c", "python build.py 114 2 && python app.py"]
+    command: ["bash", "-c", "python app.py"]
