@@ -1,0 +1,36 @@
+# 這是給協作者的範本檔。**不會被 import**(副檔名是 .example)。
+# 寫新 tool 時:
+#   1. 複製這個檔成 `tools/your_tool_name.py`
+#   2. 改 docstring / 參數 / 內部邏輯
+#   3. 到 `tools/registry.py` 的 `_TOOL_MODULES` 把模組路徑加上
+"""你的 tool 模組 — 一句話描述。"""
+from __future__ import annotations
+
+from langchain_core.tools import tool
+
+from .registry import register_tool
+
+
+@tool
+def your_tool_name(
+    required_param: str,
+    optional_param: int = 0,
+) -> str:
+    """當用戶想 [做某件事] 時呼叫此工具。
+
+    Args:
+        required_param: 描述,要寫得讓 LLM 看得懂何時填什麼
+        optional_param: 描述
+
+    Returns:
+        人類可讀的結果字串。失敗時以 "ERROR: ..." 開頭。
+    """
+    try:
+        # TODO: 你的邏輯
+        result = f"處理 {required_param}, optional={optional_param}"
+        return result
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+register_tool(your_tool_name)

@@ -230,3 +230,5 @@ readme.md
 changelog.md
 
 ### project files ###
+data.db
+vectorstore.pkl

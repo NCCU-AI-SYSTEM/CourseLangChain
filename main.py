@@ -11,6 +11,8 @@ from agent.state import AgentState
 
 load_dotenv(override=True)
 
+USE_BRAIN_AGENT = os.getenv("USE_BRAIN_AGENT", "false").lower() == "true"
+
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
 )
@@ -57,24 +59,54 @@ class CourseLangGraph:
     def __init__(self, cli=False) -> None:
         self.agent = graph
         self.streaming_agent = streaming_graph
+        if USE_BRAIN_AGENT:
+            from agents.brain_agent import brain_agent
+
+            self.brain_agent = brain_agent
+            logger.info("Brain Agent (ReAct) enabled.")
+        else:
+            self.brain_agent = None
         logger.info("Agent ready.")
 
     def invoke(self, user_input: str) -> str:
         """Synchronous invoke - returns complete response."""
-        initial_state = create_initial_state(user_input)
         config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+
+        if self.brain_agent is not None:
+            result = self.brain_agent.invoke(
+                {"messages": [{"role": "user", "content": user_input}]},
+                config=config,
+            )
+            messages = result.get("messages", [])
+            return messages[-1].content if messages else ""
+
+        initial_state = create_initial_state(user_input)
         result = self.agent.invoke(initial_state, config=config)
         return result.get("final_response", "")
 
     async def astream(self, user_input: str):
         """Async streaming invoke using LangGraph stream events."""
-        initial_state = create_initial_state(user_input)
         config = (
             {"callbacks": [langfuse_handler], "recursion_limit": 50}
             if langfuse_handler
             else {"recursion_limit": 50}
         )
 
+        if self.brain_agent is not None:
+            async for event in self.brain_agent.astream_events(
+                {"messages": [{"role": "user", "content": user_input}]},
+                config=config,
+                version="v2",
+            ):
+                if event.get("event") == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    content = getattr(chunk, "content", None)
+                    if content:
+                        yield content
+            logger.info("Brain Agent execution completed")
+            return
+
+        initial_state = create_initial_state(user_input)
         async for event in self.streaming_agent.astream_events(
             initial_state, config=config, version="v2"
         ):
