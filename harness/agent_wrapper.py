@@ -25,7 +25,7 @@ class SafeAgentExecutor:
     """ReAct agent 的安全外殼。
 
     Args:
-        executor: LangChain `AgentExecutor` 實例(由 `agent.main_agent.build_agent` 建立)
+        executor: LangChain `AgentExecutor` 實例(由 `agents.brain_agent.build_brain_agent` 建立)
         max_steps: ReAct 最多迭代幾步,防止無限呼叫工具
         timeout_sec: 總 wall-clock 上限
     """

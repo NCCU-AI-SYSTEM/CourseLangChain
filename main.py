@@ -1,17 +1,14 @@
 import logging
-import fire
 import os
-from dotenv import load_dotenv
 
+import fire
+from dotenv import load_dotenv
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
-from agent.graph import graph, streaming_graph
-from agent.state import AgentState
+from agents.brain_agent import brain_agent
 
 load_dotenv(override=True)
-
-USE_BRAIN_AGENT = os.getenv("USE_BRAIN_AGENT", "false").lower() == "true"
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -33,105 +30,42 @@ else:
 
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
-
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
-def create_initial_state(user_input: str) -> AgentState:
-    return {
-        "user_input": user_input,
-        "needs_sql": False,
-        "sql_filter": None,
-        "sql_thoughts": "",
-        "sql_validation": True,
-        "sql_validation_msg": "",
-        "sql_retry_count": 0,
-        "courses": None,
-        "retrieval_thoughts": "",
-        "final_response": "",
-        "messages": [],
-    }
-
-
 class CourseLangGraph:
-    def __init__(self, cli=False) -> None:
-        self.agent = graph
-        self.streaming_agent = streaming_graph
-        if USE_BRAIN_AGENT:
-            from agents.brain_agent import brain_agent
-
-            self.brain_agent = brain_agent
-            logger.info("Brain Agent (ReAct) enabled.")
-        else:
-            self.brain_agent = None
-        logger.info("Agent ready.")
+    def __init__(self, cli: bool = False) -> None:
+        self.brain_agent = brain_agent
+        logger.info("Brain Agent (ReAct) ready.")
 
     def invoke(self, user_input: str) -> str:
-        """Synchronous invoke - returns complete response."""
         config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
-
-        if self.brain_agent is not None:
-            result = self.brain_agent.invoke(
-                {"messages": [{"role": "user", "content": user_input}]},
-                config=config,
-            )
-            messages = result.get("messages", [])
-            return messages[-1].content if messages else ""
-
-        initial_state = create_initial_state(user_input)
-        result = self.agent.invoke(initial_state, config=config)
-        return result.get("final_response", "")
+        result = self.brain_agent.invoke(
+            {"messages": [{"role": "user", "content": user_input}]},
+            config=config,
+        )
+        messages = result.get("messages", [])
+        return messages[-1].content if messages else ""
 
     async def astream(self, user_input: str):
-        """Async streaming invoke using LangGraph stream events."""
         config = (
             {"callbacks": [langfuse_handler], "recursion_limit": 50}
             if langfuse_handler
             else {"recursion_limit": 50}
         )
-
-        if self.brain_agent is not None:
-            async for event in self.brain_agent.astream_events(
-                {"messages": [{"role": "user", "content": user_input}]},
-                config=config,
-                version="v2",
-            ):
-                if event.get("event") == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    content = getattr(chunk, "content", None)
-                    if content:
-                        yield content
-            logger.info("Brain Agent execution completed")
-            return
-
-        initial_state = create_initial_state(user_input)
-        async for event in self.streaming_agent.astream_events(
-            initial_state, config=config, version="v2"
+        async for event in self.brain_agent.astream_events(
+            {"messages": [{"role": "user", "content": user_input}]},
+            config=config,
+            version="v2",
         ):
-            event_type = event.get("event", "")
-            metadata = event.get("metadata", {})
-            node_name = metadata.get("langgraph_node", "")
-
-            if event_type in ("on_chat_model_stream", "on_llm_stream"):
-                if node_name == "respond":
-                    data = event.get("data", {})
-                    chunk = data.get("chunk", {})
-
-                    content = None
-                    if hasattr(chunk, "content"):
-                        content = chunk.content
-                    elif hasattr(chunk, "text"):
-                        content = chunk.text
-                    elif isinstance(chunk, dict):
-                        content = chunk.get("content") or chunk.get("text")
-
-                    if content:
-                        yield content
-            elif event_type == "on_chain_end" and node_name == "":
-                logger.info("Graph execution completed")
-                break
+            if event.get("event") == "on_chat_model_stream":
+                chunk = event.get("data", {}).get("chunk")
+                content = getattr(chunk, "content", None)
+                if content:
+                    yield content
+        logger.info("Brain Agent execution completed")
 
 
 async def main():

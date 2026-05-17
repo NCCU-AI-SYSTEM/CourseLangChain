@@ -1,4 +1,4 @@
-# 這是給協作者的範本檔。**不會被 import**(副檔名是 .example)。
+    # 這是給協作者的範本檔。**不會被 import**(副檔名是 .example)。
 # 寫新 tool 時:
 #   1. 複製這個檔成 `tools/your_tool_name.py`
 #   2. 改 docstring / 參數 / 內部邏輯
