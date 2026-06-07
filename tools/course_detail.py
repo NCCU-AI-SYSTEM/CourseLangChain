@@ -3,7 +3,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
-from paths import DATA_DB
+from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
 
 _FIELD_TRUNCATE = 800
 
@@ -121,14 +121,15 @@ def course_detail_tool(
                 return f"找不到 course_id={course_id} 的課程。"
             return _format_one(dict(row))
 
+        # 只給課名時必須鎖當前學期,否則 name LIKE 會撈到歷年同名課(如 101 學年的「管理學」)
         cur.execute(
             f"""
             SELECT {select_cols} FROM COURSE
-            WHERE name LIKE ?
+            WHERE name LIKE ? AND y = ? AND s = ?
             GROUP BY id
             LIMIT 10
             """,
-            (f"%{course_name}%",),
+            (f"%{course_name}%", COURSE_YEAR, COURSE_SEMESTER),
         )
         rows = [dict(r) for r in cur.fetchall()]
     except sqlite3.Error as e:

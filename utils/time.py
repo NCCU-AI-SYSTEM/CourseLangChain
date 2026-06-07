@@ -58,21 +58,23 @@ def getSessionArray(time_str: str):
     res.append(tmp)
 
   for char in time_str:
-    try:
-      if weekdayCode.index(char) >= 0:
-        if recording:
-          push_into_res()
-          recording = False
-        current_weekday = weekdayCode.index(char)
-    except ValueError:
-      if not recording:
-        current_start_time = timeChar.index(char)
-        recording = True
-      elif timeChar.index(char) != last_time + 1:
+    if char in weekdayCode:
+      if recording:
         push_into_res()
-        current_start_time = timeChar.index(char)
-      current_end_time = timeChar.index(char)
-      last_time = timeChar.index(char)
-      
-  push_into_res()
+        recording = False
+      current_weekday = weekdayCode.index(char)
+    elif char in timeChar:
+      idx = timeChar.index(char)
+      if not recording:
+        current_start_time = idx
+        recording = True
+      elif idx != last_time + 1:
+        push_into_res()
+        current_start_time = idx
+      current_end_time = idx
+      last_time = idx
+    # 其餘字元(逗號 / 空白 / 全形等)略過,不讓整串解析 crash
+
+  if recording:  # 僅在確有記錄到節次時才收尾,避免「只有星期」產生幻影節次
+    push_into_res()
   return res

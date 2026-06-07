@@ -64,13 +64,8 @@ time 欄位格式說明：
 
 用戶限制：{user_input}
 
-請用 ReAct 格式思考：
-1. 理解：用戶想要排除哪些時段
-2. 分析：對應的 SQL 邏輯
-3. 生成：SQL WHERE 子句
-4. 反思：這個 SQL 是否正確？
-
-重要：只輸出 SQL WHERE 子句的條件部分（不包含 WHERE 關鍵字），不要包含任何解釋或 markdown。
+只輸出 SQL WHERE 子句的條件部分（不包含 WHERE 關鍵字），不要任何思考過程、解釋或 markdown。
+直接回一行 SQL 條件,例如：NOT (time GLOB '*三*')
 """
 
     result = llm.invoke(prompt)
