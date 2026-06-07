@@ -16,6 +16,7 @@ from langchain_core.documents import Document
 from langchain_core.tools import tool
 
 from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, VECTORSTORE_PKL
+from utils.zh_tokenize import tokenize
 
 from .registry import register_tool
 
@@ -82,7 +83,8 @@ def _bm25_over_sql(keyword: str, sql_filter: str, top_k: int) -> list:
         )
         for r in rows
     ]
-    bm25 = BM25Retriever.from_documents(docs)
+    # preprocess_func=tokenize:中文斷詞,否則 BM25 對中文整句一個 token,關鍵字會失效
+    bm25 = BM25Retriever.from_documents(docs, preprocess_func=tokenize)
     bm25.k = min(top_k, len(docs))
     return bm25.invoke(keyword)
 

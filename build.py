@@ -6,6 +6,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents.base import Document
 from utils.time import getSessionArray, weekdayCode
 from utils.retriever import EnsembleRetriever
+from utils.zh_tokenize import tokenize
 from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, VECTORSTORE_PKL
 
 
@@ -58,8 +59,8 @@ def build(y: str, s: str, dataFile=DATA_DB, vectorStorePkl=VECTORSTORE_PKL, embe
   vectorStore = FAISS.from_documents(res, embedding=embeddings)
   faiss_retriever = vectorStore.as_retriever(search_kwargs={"k": 5})
 
-  # initialize the bm25 retriever
-  bm25_retriever = BM25Retriever.from_documents(res)
+  # initialize the bm25 retriever(preprocess_func=tokenize:中文斷詞,否則整句一個 token)
+  bm25_retriever = BM25Retriever.from_documents(res, preprocess_func=tokenize)
   bm25_retriever.k = 5
 
   # initialize the ensemble retriever (BM25 + FAISS 各半)
