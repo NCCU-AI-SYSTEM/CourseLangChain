@@ -15,7 +15,7 @@ from langchain_classic.retrievers.bm25 import BM25Retriever
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
-from paths import DATA_DB, VECTORSTORE_PKL
+from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, VECTORSTORE_PKL
 
 from .registry import register_tool
 
@@ -52,14 +52,24 @@ def _format_docs(docs, top_k: int) -> str:
 
 
 def _bm25_over_sql(keyword: str, sql_filter: str, top_k: int) -> list:
-    """先用 SQL WHERE 篩 COURSE,再對篩出的課程跑 BM25,回傳 docs。"""
+    """先用 SQL WHERE 篩 COURSE,再對篩出的課程跑 BM25,回傳 docs。
+
+    一律鎖在 build.py 建索引時的同一學期(COURSE_YEAR/COURSE_SEMESTER),否則會撈到
+    別的學年(data.db 跨學年共 10 萬+ 筆,但 pickle 只含單一學期)。
+    """
     conn = sqlite3.connect(DATA_DB)
     conn.row_factory = _dict_factory
+    sem = (COURSE_YEAR, COURSE_SEMESTER)
     try:
         try:
-            rows = conn.execute(f"SELECT * FROM COURSE WHERE {sql_filter}").fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM COURSE WHERE y = ? AND s = ? AND ({sql_filter})", sem
+            ).fetchall()
         except sqlite3.Error:
-            rows = conn.execute("SELECT * FROM COURSE").fetchall()  # filter 無效 → 退回全表
+            # filter 無效 → 退回該學期全部課程(仍鎖學期,不掃全表)
+            rows = conn.execute(
+                "SELECT * FROM COURSE WHERE y = ? AND s = ?", sem
+            ).fetchall()
     finally:
         conn.close()
     if not rows:

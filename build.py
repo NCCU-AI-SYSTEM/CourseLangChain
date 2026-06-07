@@ -6,7 +6,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents.base import Document
 from utils.time import getSessionArray, weekdayCode
 from utils.retriever import EnsembleRetriever
-from paths import DATA_DB, VECTORSTORE_PKL
+from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, VECTORSTORE_PKL
 
 
 class ClassDocument(Document):
@@ -70,8 +70,14 @@ def build(y: str, s: str, dataFile=DATA_DB, vectorStorePkl=VECTORSTORE_PKL, embe
       
 
 if __name__ == "__main__":
-  if len(sys.argv) != 3:
-    print("Usage: python build.py <year> <semester>")
-    print("Example: python build.py 113 1")
+  # 未給參數時用 paths.py 的 COURSE_YEAR/COURSE_SEMESTER(與查詢端同一來源,避免脫鉤)
+  if len(sys.argv) == 1:
+    y, s = COURSE_YEAR, COURSE_SEMESTER
+  elif len(sys.argv) == 3:
+    y, s = sys.argv[1], sys.argv[2]
+  else:
+    print("Usage: python build.py [<year> <semester>]")
+    print("Example: python build.py 114 2  (省略則用 paths.py 的 COURSE_YEAR/SEMESTER)")
     sys.exit(1)
-  build(sys.argv[1], sys.argv[2])
+  print(f"Building index for year={y}, semester={s} ...")
+  build(y, s)

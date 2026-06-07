@@ -10,3 +10,10 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 DATA_DB = os.path.join(PROJECT_ROOT, "data.db")
 VECTORSTORE_PKL = os.path.join(PROJECT_ROOT, "vectorstore.pkl")
+
+# 當前學期 —— 必須與 build.py 建索引時用的 y/s 一致(docker 預設 114 學年第 2 學期)。
+# data.db 含跨學年共 10 萬+ 筆,但 vectorstore.pkl 只建單一學期;query_courses 的
+# sql_filter 路徑會跳過 pickle 直接查 COURSE,故須用這組常數把查詢鎖回同一學期,
+# 否則會撈到別的學年(course_id 開頭學期碼對不上,排課也會錯)。
+COURSE_YEAR = os.getenv("COURSE_YEAR", "114")
+COURSE_SEMESTER = os.getenv("COURSE_SEMESTER", "2")
