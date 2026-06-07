@@ -1,6 +1,8 @@
 *.db
 *.csv
 *.pkl
+*.bak
+vectorstore.pkl*
 .env
 
 __pycache__/

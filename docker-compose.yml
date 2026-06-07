@@ -15,6 +15,11 @@ services:
       - USE_GOOGLE_AI=${USE_GOOGLE_AI}
     ports:
       - "8000:8000"
+    # data.db / vectorstore.pkl 被 .dockerignore 排除(太大,不烤進 image),
+    # 改在 runtime 掛載進容器;否則容器內無此檔 → no such table: COURSE / 找不到向量庫
+    volumes:
+      - ./data.db:/course-langchain/data.db
+      - ./vectorstore.pkl:/course-langchain/vectorstore.pkl
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # deploy:

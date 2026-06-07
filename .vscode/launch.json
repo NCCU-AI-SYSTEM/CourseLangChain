@@ -1,0 +1,29 @@
+{
+  // F5 除錯設定。在 scheduler.py 行號左側點一下設斷點,選對應設定後按 F5,
+  // 程式會停在斷點,可在「變數」面板看到每一步的值、用偵錯主控台輸入運算式。
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // 跑目前開著的檔案(例如 scratch_scheduler.py 或任何想試的檔)
+      "name": "Python: 目前檔案 (cwd=專案根)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "justMyCode": false
+    },
+    {
+      // 直接跑排課測試,可在 scheduler.py 設斷點逐步觀察
+      "name": "Python: 跑排課測試 test_scheduler",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "tests.test_scheduler",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "justMyCode": false
+    }
+  ]
+}

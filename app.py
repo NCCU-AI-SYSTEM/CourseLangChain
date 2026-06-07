@@ -39,7 +39,9 @@ async def generate_streaming(question: str):
                 full_response += str(chunk)
                 yield f"data: {json.dumps({'data': str(chunk)})}\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        # 用 data 欄位回可讀訊息(前端只認 data);否則畫面會顯示 undefined
+        msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(e).__name__})"
+        yield f"data: {json.dumps({'data': msg, 'error': str(e)})}\n\n"
 
     if langfuse_handler:
         get_client().flush()
@@ -55,7 +57,8 @@ async def generate_non_streaming(question: str):
         result = agent.invoke(question)
         yield f"data: {json.dumps({'data': result})}\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(e).__name__})"
+        yield f"data: {json.dumps({'data': msg, 'error': str(e)})}\n\n"
 
     if langfuse_handler:
         get_client().flush()

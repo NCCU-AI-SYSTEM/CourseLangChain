@@ -103,6 +103,8 @@ RUN --mount=from=ghcr.io/astral-sh/uv:latest,source=/uv,target=/bin/uv \
     # Project files
     --mount=type=bind,source=pyproject.toml,target=${PROJECT_PATH}/pyproject.toml \
     --mount=type=bind,source=uv.lock,target=${PROJECT_PATH}/uv.lock \
+    # uv download cache (keeps wheels across rebuilds when the lock changes)
+    --mount=type=cache,target=${UV_CACHE_DIR},uid=1000,gid=1000 \
     # If there are projects need ssh access
     # --mount=type=ssh \
     uv sync --frozen --no-install-project --no-install-workspace --no-dev
@@ -115,6 +117,8 @@ RUN --mount=from=ghcr.io/astral-sh/uv:latest,source=/uv,target=/bin/uv \
     # Project files
     --mount=type=bind,source=pyproject.toml,target=${PROJECT_PATH}/pyproject.toml \
     --mount=type=bind,source=uv.lock,target=${PROJECT_PATH}/uv.lock \
+    # uv download cache (shared with the step above)
+    --mount=type=cache,target=${UV_CACHE_DIR},uid=1000,gid=1000 \
     uv sync --locked --no-dev
 
 # for compatibility with prod stage COPY when uv is using python from /usr/bin

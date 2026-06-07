@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CourseLangChain 架構與更動總覽</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222c37; --line:#33414f;
+    --txt:#e6edf3; --muted:#9aa7b4; --accent:#4ea1ff; --accent2:#7ee787;
+    --new:#2ea043; --chg:#d29922; --del:#f85149; --pure:#a371f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,"PingFang TC","Microsoft JhengHei",Segoe UI,Roboto,sans-serif;
+    line-height:1.6;font-size:15px}
+  .wrap{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:28px;margin:0 0 4px;letter-spacing:.5px}
+  h2{font-size:20px;margin:40px 0 16px;padding-bottom:8px;border-bottom:2px solid var(--line);color:var(--accent)}
+  h3{font-size:16px;margin:20px 0 10px;color:var(--accent2)}
+  .sub{color:var(--muted);margin:0 0 8px}
+  code{background:#0b0f14;padding:2px 6px;border-radius:4px;font-size:13px;color:#ffd9a0;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 0;font-size:13px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  /* pipeline */
+  .pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .node{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    min-width:120px;text-align:center;display:flex;flex-direction:column;justify-content:center}
+  .node b{display:block;font-size:14px}
+  .node small{color:var(--muted);font-size:12px}
+  .arrow{display:flex;align-items:center;color:var(--accent);font-size:22px;padding:0 8px;font-weight:bold}
+  .arrow.down{justify-content:center;width:100%;padding:6px 0}
+  .badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;margin-left:6px;vertical-align:middle}
+  .b-new{background:rgba(46,160,67,.18);color:var(--new);border:1px solid var(--new)}
+  .b-chg{background:rgba(210,153,34,.18);color:var(--chg);border:1px solid var(--chg)}
+  .b-del{background:rgba(248,81,73,.16);color:var(--del);border:1px solid var(--del)}
+  .b-pure{background:rgba(163,113,247,.16);color:var(--pure);border:1px solid var(--pure)}
+  /* grid cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .card h4{margin:0 0 6px;font-size:14px}
+  .card p{margin:0;color:var(--muted);font-size:13px}
+  /* tree */
+  pre.tree{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:16px 18px;
+    overflow:auto;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.7;color:#cdd9e5}
+  .t-new{color:var(--new);font-weight:bold}
+  .t-chg{color:var(--chg);font-weight:bold}
+  .t-del{color:var(--del);text-decoration:line-through}
+  .cmt{color:#6b7785}
+  /* table */
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--accent);font-weight:600}
+  tr:hover td{background:rgba(78,161,255,.05)}
+  /* changelog */
+  .log{border-left:2px solid var(--line);margin-left:8px;padding-left:0}
+  .log .item{position:relative;padding:8px 0 8px 26px;border-bottom:1px dashed var(--line)}
+  .log .item:before{content:"";position:absolute;left:-7px;top:14px;width:12px;height:12px;
+    border-radius:50%;background:var(--accent);border:2px solid var(--bg)}
+  .log .item:last-child{border-bottom:none}
+  .log b{font-size:14px}
+  .log span{color:var(--muted);font-size:13px}
+  .pill{font-size:12px;color:var(--accent2);background:rgba(126,231,135,.1);padding:1px 8px;border-radius:10px;margin-right:6px}
+  .ok{color:var(--accent2)}
+  .warn{color:var(--chg)}
+  footer{margin-top:50px;color:var(--muted);font-size:12px;text-align:center;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>CourseLangChain · 架構與更動總覽</h1>
+  <p class="sub">NCCU 課程查詢 / 排課助手後端 · ReAct Brain Agent + 三層 Harness + 純邏輯排課引擎</p>
+  <p class="sub">產生時間:2026-05-25 · 對應模型 <code>gemma4:31b</code> · 測試 <span class="ok">59 passed</span></p>
+
+  <div class="panel">
+    <b>圖例</b>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--new)"></i>本 session 新增</span>
+      <span><i class="dot" style="background:var(--chg)"></i>本 session 修改</span>
+      <span><i class="dot" style="background:var(--del)"></i>本 session 刪除/退役</span>
+      <span><i class="dot" style="background:var(--pure)"></i>純函數(零 LLM)</span>
+    </div>
+  </div>
+
+  <!-- ============ 1. 高層架構 ============ -->
+  <h2>1 · 高層架構流</h2>
+  <p class="sub">一句話:<b>agent 不可信,正確性下沉到 tool 內部固定 pipeline + 三層 harness</b>。</p>
+  <div class="panel">
+    <div class="pipe">
+      <div class="node"><b>使用者</b><small>FastAPI / CLI</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="border-color:var(--chg)"><b>L1 輸入清理</b><span class="badge b-chg">harness</span><small>擋 prompt injection / 過長</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="border-color:var(--chg)"><b>L2 SafeAgentExecutor</b><span class="badge b-chg">改寫</span><small>step / timeout / 例外防護</small></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>ReAct Brain Agent</b><small>create_react_agent<br>(CompiledGraph)</small></div>
+    </div>
+    <div class="arrow down">↕ 工具呼叫迴圈</div>
+    <div class="pipe" style="justify-content:center">
+      <div class="node"><b>text_to_sql</b><small>時間→SQL WHERE</small></div>
+      <div class="node" style="border-color:var(--new)"><b>query_courses</b><span class="badge b-new">合併</span><small>檢索候選<br>回 course_id</small></div>
+      <div class="node"><b>course_detail</b><small>單課詳情</small></div>
+      <div class="node" style="border-color:var(--new)"><b>schedule</b><span class="badge b-new">新</span><small>排課</small></div>
+    </div>
+    <div class="arrow down">↓</div>
+    <div class="pipe" style="justify-content:center">
+      <div class="node" style="border-color:var(--chg)"><b>L3 輸出驗證</b><span class="badge b-new">schedule_no_conflict</span><small>課表衝堂把關(逐方案)</small></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>回應使用者</b><small>Markdown 課表 / 方案</small></div>
+    </div>
+    <p class="sub" style="margin-top:14px">※ <b>串流路徑</b>(<code>astream</code>)只套 L1 + recursion_limit;L3 因逐 token 無法即時驗,只在非串流 <code>invoke</code> 把關。</p>
+  </div>
+
+  <!-- ============ 2. 意圖 ============ -->
+  <h2>2 · 四種意圖 → 工具對應</h2>
+  <table>
+    <tr><th>意圖</th><th>例子</th><th>走的工具</th></tr>
+    <tr><td><b>A 一般問答</b></td><td>「你好」「選課系統何時開」</td><td>不呼叫工具,直接簡答</td></tr>
+    <tr><td><b>B 查課表</b></td><td>「給我關於 AI 的課」「不要週三的機器學習」</td><td><code>query_courses</code>(有時間限制先 <code>text_to_sql</code> → 帶 sql_filter)</td></tr>
+    <tr><td><b>C 課程詳情</b></td><td>「機器學習的評分方式」「第二門課的課綱」</td><td><code>course_detail</code>(帶 course_id 避免同名歧義)</td></tr>
+    <tr><td><b>D 排課</b></td><td>「幫我排 6~9 學分、避開週五的管理課」</td><td><code>query_courses</code> → <code>schedule</code>(兩步,course_id 是橋樑)</td></tr>
+  </table>
+
+  <!-- ============ 3. 排課資料流 ============ -->
+  <h2>3 · 排課資料流(意圖 D 的核心)</h2>
+  <p class="sub">兩個 tool 不直接互相呼叫 —— <b>agent(LLM)當搬運工,把 13 位 course_id 從 query 結果抄進 schedule</b>。</p>
+  <div class="panel">
+    <div class="pipe" style="align-items:center">
+      <div class="node"><b>① query_courses</b><small>keyword="管理"<br>top_k=20</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="min-width:230px"><b>候選清單(文字)</b><small>「管理學｜course_id: 1142000348041｜時間: 四D56｜學分: 3.0」…</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="border-color:var(--accent)"><b>② agent 抄 id</b><small>挑要的 → 逗號串接</small></div>
+    </div>
+    <div class="arrow down">↓ course_ids="1142…,1142…"</div>
+    <div class="pipe" style="align-items:center;justify-content:center">
+      <div class="node"><b>③ schedule_tool</b><small>min/max_credits<br>avoid_weekdays</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="border-color:var(--pure);min-width:430px">
+        <b>scheduler.py 內部 pipeline <span class="badge b-pure">純函數</span></b>
+        <small style="margin-top:6px">
+          fetch_courses(用 id 回 DB 查<b>真實</b>學分/時間)<br>
+          → find_schedules(DFS+剪枝)→ validate(不可跳過)<br>
+          → rank → format_markdown
+        </small>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:14px">關鍵:schedule <b>只信 id</b>,拿 id 回資料庫查真資料,不信 agent 轉述 → 防幻覺。course_id 用 13 位純數字,不做短編號。</p>
+  </div>
+
+  <!-- ============ 4. Harness ============ -->
+  <h2>4 · 三層 Harness</h2>
+  <div class="cards">
+    <div class="card"><h4>L1 · input_sanitizer</h4><p>regex 偵測 prompt injection、控制 token、長度上限(500)。不安全直接擋,不送進 LLM。</p></div>
+    <div class="card"><h4>L2 · SafeAgentExecutor <span class="badge b-chg">改寫</span></h4><p>包 LangGraph CompiledGraph(原本是包 LangChain AgentExecutor)。recursion_limit=2·max_steps+1、daemon thread 真逾時(120s)、例外轉友善訊息,永不 raise。</p></div>
+    <div class="card"><h4>L3 · output_validator</h4><p>驗證器登記制。<code>schedule_tool</code> 自註冊 <code>schedule_no_conflict</code>:逐「### 方案」檢查衝堂,fail-open 防誤殺。</p></div>
+  </div>
+
+  <!-- ============ 5. 檔案結構 ============ -->
+  <h2>5 · 檔案結構(標出本 session 變動)</h2>
+  <pre class="tree">CourseLangChain/
+├── <span class="t-new">paths.py</span>                  <span class="cmt"># 新:cwd 無關的絕對路徑(DATA_DB / VECTORSTORE_PKL)</span>
+├── main.py                   <span class="cmt"># 改:invoke 串 L1→L2→L3;astream 套 L1</span>
+├── app.py                    <span class="cmt"># 改:串流出錯改回 data 欄位(修前端 undefined)</span>
+├── build.py                  <span class="cmt"># 改:預設路徑改用 paths.py</span>
+├── docker-compose.yml        <span class="cmt"># 改:掛載 data.db / vectorstore.pkl(修 no such table)</span>
+├── agents/
+│   └── brain_agent.py        <span class="cmt"># 改:4 個 tool、新增意圖 D、合併查課入口</span>
+├── tools/
+│   ├── <span class="t-chg">query_courses.py</span>       <span class="cmt"># 改:合併 retrieval,加 sql_filter,回 course_id+學分</span>
+│   ├── <span class="t-new">schedule_tool.py</span>       <span class="cmt"># 新:排課 tool(+ L3 衝堂 validator)</span>
+│   ├── <span class="t-new">scheduler.py</span>           <span class="cmt"># 新:純函數 solver/validator/ranker/format</span>
+│   ├── <span class="t-del">retrieval.py</span>           <span class="cmt"># 退役:能力併入 query_courses 後刪除</span>
+│   ├── course_detail.py      <span class="cmt"># 改:路徑用 paths.py、docstring 更新</span>
+│   ├── text_to_sql.py
+│   └── registry.py           <span class="cmt"># 改:註冊兩個排課 tool</span>
+├── harness/
+│   ├── <span class="t-chg">agent_wrapper.py</span>       <span class="cmt"># 改:重寫成包 CompiledGraph + daemon thread 逾時</span>
+│   ├── input_sanitizer.py    <span class="cmt"># L1</span>
+│   └── output_validator.py   <span class="cmt"># L3</span>
+├── tests/
+│   ├── <span class="t-new">test_scheduler.py</span>          <span class="cmt"># 新:22 純邏輯測試</span>
+│   ├── <span class="t-new">test_schedule_tool.py</span>      <span class="cmt"># 新:19 tool 測試(含 sql_filter)</span>
+│   ├── <span class="t-new">test_harness_integration.py</span><span class="cmt"># 新:18 harness/接線測試</span>
+│   └── <span class="t-new">_e2e_manual.py</span>             <span class="cmt"># 新:手動端到端 driver</span>
+├── data.db                   <span class="cmt"># SQLite,COURSE 表(.dockerignore 排除 → 需掛載)</span>
+└── vectorstore.pkl           <span class="cmt"># 2.3GB FAISS+BM25(同上)</span></pre>
+
+  <!-- ============ 6. 更動清單 ============ -->
+  <h2>6 · 本 session 更動時間線</h2>
+  <div class="panel log">
+    <div class="item"><b>段 1 · 純邏輯排課引擎</b> <span class="pill">scheduler.py</span><br>
+      <span>DFS+剪枝 solver、衝堂 validator、slot 集合交集判衝堂(複用 getSessionArray)。standalone 測試含真實 data.db。</span></div>
+    <div class="item"><b>段 2 · 包成 tool</b> <span class="pill">schedule_tool</span><span class="pill">query_courses</span><br>
+      <span>扁平參數 + ERROR: 字串契約;query 回 13 位 course_id 讓 agent 搬運;registry 註冊。</span></div>
+    <div class="item"><b>段 3 · 接進 agent + 修 harness</b> <span class="pill">agent_wrapper</span><span class="pill">main.py</span><br>
+      <span>SafeAgentExecutor 改寫成包 CompiledGraph(修不相容 + daemon thread 真逾時);掛意圖 D;L3 衝堂 validator;invoke 串三層。</span></div>
+    <div class="item"><b>端到端驗證</b> <span class="pill ok">gemma4:31b</span><br>
+      <span>閒聊/查課/排課三類全跑通,Langfuse trace 確認排課走 query→schedule 兩步,模型把 10+ 個 13 位 id 一字不差抄對。</span></div>
+    <div class="item"><b>scheduler 正確性修正</b><br>
+      <span>排除「時間未定」課、同名課去重(重複修課);validator 同步加兩條把關。</span></div>
+    <div class="item"><b>檢索 tool 合併</b> <span class="pill">退役 retrieval_tool</span><br>
+      <span>query_courses 併入 sql_filter 時間過濾,成為唯一檢索入口;刪除 retrieval.py;工具 5→4 個。</span></div>
+    <div class="item"><b>路徑 / 錯誤 / 部署修正</b> <span class="pill warn">線上問題</span><br>
+      <span>paths.py 錨定絕對路徑(修 <code>no such table: COURSE</code>);app.py 串流錯誤改 data 欄位(修前端 undefined);docker-compose 掛載資料檔。</span></div>
+  </div>
+
+  <!-- ============ 7. 測試 ============ -->
+  <h2>7 · 測試狀態</h2>
+  <table>
+    <tr><th>測試檔</th><th>數量</th><th>涵蓋</th></tr>
+    <tr><td><code>test_scheduler.py</code></td><td class="ok">22 ✓</td><td>解析時段、衝堂、學分上下限、避開星期、未定排除、同名去重、真實 DB</td></tr>
+    <tr><td><code>test_schedule_tool.py</code></td><td class="ok">19 ✓</td><td>id 切分、正常/錯誤路徑、排不出說明、query 格式、sql_filter 分支、registry</td></tr>
+    <tr><td><code>test_harness_integration.py</code></td><td class="ok">18 ✓</td><td>SafeAgentExecutor 正常/逾時/例外、L1 sanitize、L3 衝堂、brain_agent 接線</td></tr>
+    <tr><td><b>合計</b></td><td class="ok"><b>59 passed</b></td><td>+ <code>_e2e_manual.py</code> 真模型端到端(需 Ollama + pickle)</td></tr>
+  </table>
+
+  <!-- ============ 8. 待辦 ============ -->
+  <h2>8 · 已知待辦(不在已完成範圍)</h2>
+  <div class="cards">
+    <div class="card"><h4>sql_filter 沒過濾學年期</h4><p>查的是整個 COURSE 表,會混到別學期的課;應自動補 <code>y</code>/<code>s</code> 限制。</p></div>
+    <div class="card"><h4>重複修課用課名去重</h4><p>目前以「課名」辨識同一門課;subNum 前綴會更精準。</p></div>
+    <div class="card"><h4>檢索相關性偏雜</h4><p>keyword「管理」會撈到體育課,需 rerank / 更好的 embedding。</p></div>
+    <div class="card"><h4>串流無 L3</h4><p>逐 token 串流時衝堂驗證無法即時套用,僅非串流 invoke 把關。</p></div>
+    <div class="card"><h4>Phase 3 個人化</h4><p>藍圖下一階段:preference 記憶、課表排序、多種方案風格。</p></div>
+  </div>
+
+  <footer>CourseLangChain · 自動產生的架構快照 · 對照 ARCHITECTURE_BLUEPRINT.md 與本 session 更動</footer>
+</div>
+</body>
+</html>

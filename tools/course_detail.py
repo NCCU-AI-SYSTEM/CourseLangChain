@@ -3,6 +3,8 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from paths import DATA_DB
+
 _FIELD_TRUNCATE = 800
 
 
@@ -69,16 +71,16 @@ def _format_candidates(rows: list[dict]) -> str:
 def course_detail_tool(
     course_name: str,
     course_id: Optional[str] = None,
-    db_path: str = "data.db",
+    db_path: str = DATA_DB,
 ) -> str:
     """查詢「單一門」課的詳細資料(教學內容、課程目標、評分方式、教科書、上課方式、備註等)。
 
     用途:當使用者想知道某門課的「詳細資料」「課綱」「評分方式」「教科書」「上課方式」「教學內容」時呼叫。
-    不適用於列出多門候選課程(那是 retrieval_tool 的工作)。
+    不適用於列出多門候選課程(那是 query_courses_tool 的工作)。
 
     參數:
     - course_name: 課程名稱,可模糊比對(例如「機器學習」)
-    - course_id: 課程編號(優先使用)。若上一輪 retrieval_tool 結果中已知,務必一併帶入,以免比對到多筆同名課。
+    - course_id: 課程編號(優先使用)。若上一輪 query_courses_tool 結果中已知,務必一併帶入,以免比對到多筆同名課。
 
     回傳:
     - 找到 1 筆 → Markdown 區塊化的詳細資料(課程資訊 / 教學內容 / 評分方式 ...)
@@ -129,6 +131,10 @@ def course_detail_tool(
             (f"%{course_name}%",),
         )
         rows = [dict(r) for r in cur.fetchall()]
+    except sqlite3.Error as e:
+        # 契約:tool 失敗回字串而非 raise(否則整個 graph 會 crash)。
+        # 最常見:db_path 指到空檔(no such table: COURSE)→ 資料庫沒掛好/路徑錯。
+        return f"ERROR: 課程資料庫無法查詢({e})。請確認 data.db 已就緒。"
     finally:
         conn.close()
 

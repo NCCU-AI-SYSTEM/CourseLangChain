@@ -66,8 +66,8 @@ def all_tools() -> list[Any]:
 # ---- 在這裡列出所有 tool 模組,讓它們的 register_tool 副作用觸發 ----
 _TOOL_MODULES: tuple[str, ...] = (
     "tools.echo_tool",               # ← dummy,協作者第一個真實 tool 上線後可移除
-    # "tools.query_courses",         # ← 協作者新增 tool 時加這裡
-    # "tools.recommend_schedule",
+    "tools.query_courses",           # 段 2:檢索候選課程(回 course_id)
+    "tools.schedule_tool",           # 段 2:接候選 id 排課
 )
 
 _imported = False

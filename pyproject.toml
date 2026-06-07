@@ -30,3 +30,15 @@ dependencies = [
 dev = [
     "langsmith>=0.7.17",
 ]
+
+# Pull torch/torchvision from PyTorch's CPU-only index so the image doesn't
+# drag in the ~2-3GB of nvidia-*-cu12 CUDA packages. Drop this block (and
+# re-lock) if you ever need GPU inference.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]

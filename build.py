@@ -6,8 +6,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents.base import Document
 from utils.time import getSessionArray, weekdayCode
 from utils.retriever import EnsembleRetriever
-
-import torch
+from paths import DATA_DB, VECTORSTORE_PKL
 
 
 class ClassDocument(Document):
@@ -40,7 +39,7 @@ def dict_factory(cursor, row):
 def document_factory(cursor, row):
   return ClassDocument(dict_factory(cursor, row))
 
-def build(y: str, s: str, dataFile="data.db", vectorStorePkl="vectorstore.pkl", embeddingModel="BAAI/bge-m3"):
+def build(y: str, s: str, dataFile=DATA_DB, vectorStorePkl=VECTORSTORE_PKL, embeddingModel="BAAI/bge-m3"):
   con = sqlite3.connect(dataFile)
   con.row_factory = document_factory
   cursor = con.cursor()
@@ -48,30 +47,26 @@ def build(y: str, s: str, dataFile="data.db", vectorStorePkl="vectorstore.pkl", 
   req = cursor.execute("SELECT * FROM COURSE WHERE y = ? AND s = ?", (y, s))
   res = req.fetchall()
   
-  if(torch.cuda.is_available()):
-  
-    embeddings = HuggingFaceEmbeddings(model_name=embeddingModel)
+  # embedding 一律綁 CPU,讓產出的 pickle 不依賴 CUDA(部署目標是 CPU 容器)。
+  # 即使在有 GPU 的機器上建,也在 CPU 上 embed(慢一點,但一次性),確保容器載得動。
+  embeddings = HuggingFaceEmbeddings(
+    model_name=embeddingModel,
+    model_kwargs={"device": "cpu"},
+  )
 
-    # initialize the faiss retriever
-    vectorStore = FAISS.from_documents(res, embedding=embeddings)
-    faiss_retriever = vectorStore.as_retriever(search_kwargs={"k": 5})
-      
-    # initialize the bm25 retriever
-    bm25_retriever = BM25Retriever.from_documents(res)
-    bm25_retriever.k = 5
+  # initialize the faiss retriever
+  vectorStore = FAISS.from_documents(res, embedding=embeddings)
+  faiss_retriever = vectorStore.as_retriever(search_kwargs={"k": 5})
 
-    # initialize the ensemble retriever
-    # ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, faiss_retriever], weights=[0, 1])
-    ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, faiss_retriever], weights=[0.5, 0.5])
-    
-    with open(vectorStorePkl, "wb") as f:
-      pickle.dump(ensemble_retriever, f)
-  else:
-    bm25_retriever = BM25Retriever.from_documents(res)
-    bm25_retriever.k = 5
-    
-    with open(vectorStorePkl, "wb") as f:
-      pickle.dump(bm25_retriever, f)
+  # initialize the bm25 retriever
+  bm25_retriever = BM25Retriever.from_documents(res)
+  bm25_retriever.k = 5
+
+  # initialize the ensemble retriever (BM25 + FAISS 各半)
+  ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, faiss_retriever], weights=[0.5, 0.5])
+
+  with open(vectorStorePkl, "wb") as f:
+    pickle.dump(ensemble_retriever, f)
       
 
 if __name__ == "__main__":

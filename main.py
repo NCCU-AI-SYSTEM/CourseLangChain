@@ -7,8 +7,14 @@ from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
 from agents.brain_agent import brain_agent
+from harness import SafeAgentExecutor, sanitize_input, validate_output
 
 load_dotenv(override=True)
+
+# L1 擋下不安全輸入時回給使用者的訊息
+_REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方式重新提問。"
+# L3 驗證未通過時回給使用者的訊息(寧可不回課表,也不給錯誤課表)
+_INVALID_OUTPUT_MSG = "抱歉,系統產生的課表未通過正確性檢查,請調整條件後再試一次。"
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -38,25 +44,51 @@ logger.addHandler(ch)
 class CourseLangGraph:
     def __init__(self, cli: bool = False) -> None:
         self.brain_agent = brain_agent
-        logger.info("Brain Agent (ReAct) ready.")
+        # L2:把 ReAct graph 包進安全外殼(step / timeout / exception 防護)
+        self.executor = SafeAgentExecutor(brain_agent)
+        logger.info("Brain Agent (ReAct) ready,三層 harness 已啟用。")
+
+    def _base_config(self) -> dict:
+        return {"callbacks": [langfuse_handler]} if langfuse_handler else {}
 
     def invoke(self, user_input: str) -> str:
-        config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
-        result = self.brain_agent.invoke(
-            {"messages": [{"role": "user", "content": user_input}]},
-            config=config,
+        # L1:輸入清理
+        text, is_safe = sanitize_input(user_input)
+        if not is_safe:
+            logger.warning("input rejected by L1 sanitizer")
+            return _REJECT_MSG
+
+        # L2:安全外殼執行(永不 raise)
+        result = self.executor.run(text, config=self._base_config())
+        output = result["output"]
+        logger.info(
+            "agent done: steps=%s elapsed=%ss error=%s",
+            result["steps"], result["elapsed_sec"], result["error"],
         )
-        messages = result.get("messages", [])
-        return messages[-1].content if messages else ""
+        if result["error"]:
+            return output  # 已是友善訊息
+
+        # L3:輸出驗證(衝堂等)
+        ok, msg = validate_output(output)
+        if not ok:
+            logger.warning("output rejected by L3: %s", msg)
+            return _INVALID_OUTPUT_MSG
+        return output
 
     async def astream(self, user_input: str):
-        config = (
-            {"callbacks": [langfuse_handler], "recursion_limit": 50}
-            if langfuse_handler
-            else {"recursion_limit": 50}
-        )
+        # L1:輸入清理(串流路徑同樣先擋)
+        text, is_safe = sanitize_input(user_input)
+        if not is_safe:
+            logger.warning("input rejected by L1 sanitizer (stream)")
+            yield _REJECT_MSG
+            return
+
+        # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
+        # 不套用(會切斷已輸出的 token)。L3 輸出驗證亦因逐 token 串流無法即時套用,
+        # 改在非串流 invoke 路徑把關。
+        config = {**self._base_config(), "recursion_limit": self.executor.recursion_limit}
         async for event in self.brain_agent.astream_events(
-            {"messages": [{"role": "user", "content": user_input}]},
+            {"messages": [{"role": "user", "content": text}]},
             config=config,
             version="v2",
         ):
