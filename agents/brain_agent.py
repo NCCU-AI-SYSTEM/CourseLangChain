@@ -10,6 +10,7 @@ from tools.course_detail import course_detail_tool
 from tools.query_courses import query_courses_tool
 from tools.schedule_tool import schedule_tool
 from tools.text_to_sql import text_to_sql_tool
+from tools.user_profile import user_profile_tool
 
 load_dotenv(override=True)
 
@@ -33,6 +34,10 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 4. schedule_tool(course_ids: str, min_credits: float, max_credits: float, avoid_weekdays: str, max_results: int) -> str
    排課:接一串逗號分隔的 course_id,排出「無衝堂、學分達標」的課表方案。
    course_ids 一律從 query_courses_tool 的結果原樣抄過來,不可自己編造。avoid_weekdays 用中文字逗號分隔(如 "五")。
+5. user_profile_tool(record_path: str) -> str
+   讀使用者自帶的成績單,回「去識別化」的修課狀況(已修課、本學期已選、畢業缺口)。這是可選功能。
+   當使用者要「個人化排課」、提到自身修課狀況、或要避免重複推薦已修過的課時呼叫。
+   若回傳「未提供成績單」之類訊息,就當作沒有這項資訊、照常排課,不要追問或要求使用者提供。
 
 # 三類意圖判斷與行為
 
@@ -62,10 +67,13 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 ## D. 排課(幫忙排出一週課表)
 條件:使用者要系統「幫忙排課表 / 安排課表 / 湊學分」,常帶學分數、避開時段、想修的主題等
      (如「幫我排 12 學分的課,避開週五」「我想修 AI 相關的課排成課表」)。
-動作(兩步,course_id 是橋樑):
-1. 先 query_courses_tool(keyword, top_k=20) 取得候選課程清單(內含每門的 course_id)
+動作(course_id 是橋樑):
+0.(可選,個人化)若使用者要個人化排課、或提到自身修課狀況 → 先 user_profile_tool。
+   - 有拿到 profile:用其「學分」推算 min/max、把「已修過 + 本學期已選」當排除清單(別把這些課排進去),畢業缺口可當 query 的關鍵字方向。
+   - 回「未提供成績單」就忽略這步,照常排課,不要追問使用者要資料。
+1. query_courses_tool(keyword, top_k=20) 取得候選課程清單(內含每門的 course_id)
    - 排課要多一點候選才排得開,top_k 建議設 20
-2. 從上一步結果把要納入的 course_id 用逗號接起來,呼叫
+2. 從上一步結果把要納入的 course_id 用逗號接起來(若有排除清單,先剔除已修/已選的同名課),呼叫
    schedule_tool(course_ids, min_credits, max_credits, avoid_weekdays)
    - 使用者給「18 學分」這類單一數字時,可設 min_credits 略低、max_credits 等於該值(如 15 與 18)
    - 沒講避開星期就傳空字串
@@ -109,6 +117,7 @@ def build_brain_agent():
             query_courses_tool,
             course_detail_tool,
             schedule_tool,
+            user_profile_tool,
         ],
         prompt=SystemMessage(content=SYSTEM_PROMPT),
     )

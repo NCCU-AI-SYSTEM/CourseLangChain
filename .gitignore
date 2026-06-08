@@ -13,3 +13,8 @@ uploads
 .DS_Store
 
 trace*.json
+
+# 使用者自帶的成績單(含個資,絕不進 git);.example 範本可進
+user_record.json
+user_record*.json
+!user_record.example.json

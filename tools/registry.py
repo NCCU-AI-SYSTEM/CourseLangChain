@@ -68,6 +68,7 @@ _TOOL_MODULES: tuple[str, ...] = (
     "tools.echo_tool",               # ← dummy,協作者第一個真實 tool 上線後可移除
     "tools.query_courses",           # 段 2:檢索候選課程(回 course_id)
     "tools.schedule_tool",           # 段 2:接候選 id 排課
+    "tools.user_profile",            # 段 3:個人化——讀使用者成績單(可選)
 )
 
 _imported = False
