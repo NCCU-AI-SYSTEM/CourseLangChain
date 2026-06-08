@@ -17,21 +17,40 @@
 
 ## 2. Current State Summary
 
-目前專案後端核心比較接近「RAG 問答鏈」：
+> 更新於 2026-06：藍圖第一波(Brain Agent + 三層 harness + 排課引擎)已落地，本節改為記錄實際現況，不再是原本的「RAG 問答鏈」。
 
-- 從 `vectorstore.pkl` 取回課程相關內容
-- 將使用者問題與檢索結果送入固定 prompt
-- 回傳表格式課程回答
+### 2.1 已實作
 
-這種做法適合課程查詢，但不足以支援：
+後端已從原本「固定 5 節點 graph(`route → sql_gen → validate_sql → retrieve → respond`)」升級為 **ReAct Brain Agent + 三層 harness**：
 
-- 多步驟決策
-- 個人化約束處理
-- 排課最佳化
-- 使用者偏好記憶
-- 多方案比較
+- **Brain Agent**(`agents/brain_agent.py`)：用 `langgraph.prebuilt.create_react_agent` 包住工具，由 LLM 依意圖自行決定 tool 呼叫順序，取代舊的條件分支。
+- **三層 harness**(`harness/`)：把正確性/安全性從不可信的 agent 推進確定性程式碼。
+  - L1 `input_sanitizer`：prompt injection 偵測 + 長度上限
+  - L2 `SafeAgentExecutor`：step 上限(recursion_limit)+ wall-clock timeout + 例外永不外漏
+  - L3 `output_validator`：各 tool 自註冊驗證器；排課器註冊「無衝堂」對最終輸出再驗一次
+- **已上線工具**(`tools/`)：
+  - `query_courses_tool` —— 即藍圖的 `course_catalog_tool`，查課與排課共用的檢索。FAISS(bge-m3)+ BM25 ensemble；帶 `sql_filter` 時改走純 BM25。回傳含 13 位 `course_id` + 學分。
+  - `text_to_sql_tool` —— 自然語言時間限制 → SQL WHERE 子句，當作 query 的 `sql_filter`。
+  - `course_detail_tool` —— 單一門課詳情(課綱 / 評分 / 教科書 / 上課方式…)。
+  - `schedule_tool` + `tools/scheduler.py` —— 純函數排課引擎(DFS+剪枝 → 驗證 → 排序 → Markdown)，零 LLM。對應藍圖的 conflict_validation + schedule_planner(MVP)。
 
-因此建議升級為以 orchestration 為核心的 agent architecture。
+### 2.2 近期修正(2026-06)
+
+本波針對檢索與排課的正確性修了數個 bug：
+
+- **檢索鎖當前學期**：`data.db` 跨學年共 10 萬+ 筆，`query_courses` / `course_detail` 原本沒鎖 `y/s`，會撈到歷年同名課。改由 `paths.COURSE_YEAR / COURSE_SEMESTER` 單一來源鎖定(`build.py` 共用)。
+- **中文檢索修復**：BM25 預設 `str.split()` 對中文整句變成單一 token，關鍵字在 `sql_filter` 路徑完全失效(查「管理」回體育課)。導入 jieba 斷詞(`utils/zh_tokenize.py`，無 jieba 時退回字元 bigram)，並重建 `vectorstore.pkl` 讓 ensemble 的 BM25 半邊也乾淨。
+- **時間解析強健化**：`utils/time.getSessionArray` 遇未知字元(逗號/空白)會 crash、且「只有星期」會產生幻影節次，連帶可能讓 L3 驗證誤拒正確課表。已重寫解析迴圈。
+- **text_to_sql prompt**：移除自相矛盾的「ReAct 思考 + 只輸出 SQL」指示，改為純單句輸出。
+
+### 2.3 仍待補(對齊後續 Phase)
+
+相對於完整藍圖，目前仍缺：
+
+- 個人化：`user_profile` / `preference_memory` / 畢業規則 / 課程地圖(Phase 3)
+- 壓力模型：`workload` / 期中期末(Phase 4)
+- 互動微調：what-if / 多方案比較 UI(Phase 5)
+- 結構化資料：目前仍以單一 `COURSE` 表為主，尚未拆出 meeting / curriculum / load 等表(見 §7)
 
 ---
 
@@ -168,6 +187,8 @@ LLM 負責：
 
 - structured course list
 
+> 現況：已實作為 `tools/query_courses.py`(`query_courses_tool`)。已鎖當前學期(`y/s`)、BM25 導入 jieba 中文斷詞；keyword/sql_filter 雙模式可用。`required_only`、department filter 尚未支援。
+
 ### `user_profile_tool`
 
 用途：
@@ -239,6 +260,8 @@ LLM 負責：
 - prerequisite violations
 - semester rule violations
 
+> 現況：衝堂、學分上下限、避開時段、重複修課(同名去重)、時間未定排除 已由 `tools/scheduler.py::validate_schedule` 實作,並在 L3 對 agent 最終輸出再驗一次。先修條件(prerequisite)檢查尚未做。
+
 ### `schedule_planner_tool`
 
 用途：
@@ -254,6 +277,8 @@ LLM 負責：
 輸出：
 
 - 3 to 10 candidate schedules
+
+> 現況：MVP 已實作為 `tools/schedule_tool.py` + `tools/scheduler.py`(DFS + 剪枝列舉合法組合 → 排序 → Markdown),純函數零 LLM。排序目前用啟發式(上課天數少、學分高);尚未接 workload / preference 等軟限制評分。
 
 ### `workload_estimation_tool`
 
@@ -716,7 +741,7 @@ CourseLangGraph/
 
 ## 13. MVP Roadmap
 
-## Phase 1: Agent foundation
+## Phase 1: Agent foundation　（大致完成）
 
 目標：
 
@@ -725,11 +750,11 @@ CourseLangGraph/
 交付：
 
 - session-aware API
-- tool calling interface
-- basic user profile loading
-- basic course catalog lookup
+- tool calling interface　✅(ReAct Brain Agent + 三層 harness)
+- basic user profile loading　⬜(尚未,user_profile_tool 未做)
+- basic course catalog lookup　✅(`query_courses_tool`)
 
-## Phase 2: Constraint-based scheduling
+## Phase 2: Constraint-based scheduling　（部分完成）
 
 目標：
 
@@ -737,10 +762,10 @@ CourseLangGraph/
 
 交付：
 
-- conflict validation
-- prerequisite check
-- credit range check
-- candidate schedule generation
+- conflict validation　✅(`scheduler.validate_schedule` + L3 再驗)
+- prerequisite check　⬜(尚未)
+- credit range check　✅
+- candidate schedule generation　✅(`schedule_tool` + `scheduler.find_schedules`)
 
 ## Phase 3: Personalization
 
@@ -819,6 +844,8 @@ CourseLangGraph/
 ---
 
 ## 16. First Refactor Proposal for This Repo
+
+> 進度(2026-06)：Step 1(brain_agent)、Step 2(course_catalog ← `query_courses_tool`)、Step 5(schedule_planner MVP ← `schedule_tool`)、Step 6(部分,排課輸出已是 Markdown 方案但尚無 `plan_explainer_tool`)已完成;Step 3(結構化 repository 層)、Step 4(`user_profile_tool` + mock user)尚未做。詳見 §2.1。
 
 基於目前 repo，第一波建議不要一次大改到底，可以先做這些：
 
