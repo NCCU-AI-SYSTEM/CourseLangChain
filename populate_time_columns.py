@@ -125,10 +125,10 @@ def main() -> None:
             "id":           cid,
             "sessions":     json.dumps(sessions, ensure_ascii=False),
             "weekdays":     weekdays,
-            "has_morning":  any(8  <= s["start_hour"] < 12 for s in sessions),
-            "has_noon":     any(12 <= s["start_hour"] < 13 for s in sessions),
-            "has_afternoon":any(13 <= s["start_hour"] < 18 for s in sessions),
-            "has_evening":  any(s["start_hour"] >= 18       for s in sessions),
+            "has_morning":  any(s["start_hour"] < 12 and s["end_hour"] > 8  for s in sessions),
+            "has_noon":     any(s["start_hour"] < 13 and s["end_hour"] > 12 for s in sessions),
+            "has_afternoon":any(s["start_hour"] < 18 and s["end_hour"] > 13 for s in sessions),
+            "has_evening":  any(s["end_hour"] > 18                          for s in sessions),
         })
 
         if len(batch) >= BATCH_SIZE:

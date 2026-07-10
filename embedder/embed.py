@@ -38,7 +38,8 @@ def main():
         device="cpu",
         model_kwargs={"torch_dtype": torch.float32},
     )
-    print("[embedder] Model loaded.", flush=True)
+    EMBEDDING_DIM = model.get_sentence_embedding_dimension()
+    print(f"[embedder] Model loaded. Embedding dimension: {EMBEDDING_DIM}", flush=True)
 
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = False
@@ -82,7 +83,7 @@ def main():
         for course_id, emb in zip(ids, embeddings):
             if torch.isnan(torch.tensor(emb)).any():
                 print(f"[embedder] WARNING: NaN for id={course_id}, storing zero vector", flush=True)
-                emb = [0.0] * 768
+                emb = [0.0] * EMBEDDING_DIM
                 skipped += 1
             cur.execute(
                 "UPDATE public.course SET embedding = %s::vector WHERE id = %s",
