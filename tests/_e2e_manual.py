@@ -7,7 +7,7 @@ import time
 
 import main
 from langfuse import get_client
-from tools.query_courses import _get_retriever
+from tools.retrieve import _get_retriever
 
 g = main.CourseLangGraph()
 

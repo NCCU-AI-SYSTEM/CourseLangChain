@@ -1,32 +1,49 @@
 services:
-  courselanggraph:
+  postgres:
     build:
-      args:
-        PROJECT_PATH: /course-langchain
       context: .
-      dockerfile: Dockerfile
-    environment:
-      - OLLAMA_HOST=${OLLAMA_HOST}
-      - MODEL=${MODEL}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
-      - USE_GOOGLE_AI=${USE_GOOGLE_AI}
+      dockerfile: db/Dockerfile
     ports:
-      - "8000:8000"
-    # data.db / vectorstore.pkl 被 .dockerignore 排除(太大,不烤進 image),
-    # 改在 runtime 掛載進容器;否則容器內無此檔 → no such table: COURSE / 找不到向量庫
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: academic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d academic"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
     volumes:
-      - ./data.db:/course-langchain/data.db
-      - ./vectorstore.pkl:/course-langchain/vectorstore.pkl
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    command: ["bash", "-c", "python app.py"]
+      - pgdata:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+
+  populator:
+    build:
+      context: .
+      dockerfile: populator/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
+    restart: no
+
+  embedder:
+    build:
+      context: ./embedder
+      dockerfile: Dockerfile
+    depends_on:
+      populator:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
+      MODEL_NAME: google/embeddinggemma-300m
+      HF_TOKEN: ${HF_TOKEN}
+    restart: no
+
+volumes:
+  pgdata:

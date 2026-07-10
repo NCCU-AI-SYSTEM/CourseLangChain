@@ -13,7 +13,7 @@ import sqlite3
 
 from langchain_core.tools import tool
 
-from paths import DATA_DB
+from paths import DATA_DB, DATABASE_URL, USE_SQLITE
 from tools.scheduler import (
     CourseSlot,
     find_schedules,
@@ -46,6 +46,12 @@ def _fetch_courses(ids: list[str], db_path: str = DB_PATH) -> tuple[list[CourseS
     """依 id 從 COURSE 撈課,回 (CourseSlot 清單, 找不到的 id 清單)。"""
     if not ids:
         return [], []
+    if USE_SQLITE:
+        return _fetch_courses_sqlite(ids, db_path)
+    return _fetch_courses_pg(ids)
+
+
+def _fetch_courses_sqlite(ids: list[str], db_path: str) -> tuple[list[CourseSlot], list[str]]:
     placeholders = ",".join("?" for _ in ids)
     conn = sqlite3.connect(db_path)
     try:
@@ -53,6 +59,30 @@ def _fetch_courses(ids: list[str], db_path: str = DB_PATH) -> tuple[list[CourseS
             f"SELECT id, name, point, time, teacher FROM COURSE WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
+    finally:
+        conn.close()
+
+    found = {str(r[0]): r for r in rows}
+    courses = [
+        make_course(r[0], r[1], r[2], r[3], r[4]) for r in (found[i] for i in ids if i in found)
+    ]
+    missing = [i for i in ids if i not in found]
+    return courses, missing
+
+
+def _fetch_courses_pg(ids: list[str]) -> tuple[list[CourseSlot], list[str]]:
+    import psycopg2
+
+    placeholders = ",".join("%s" for _ in ids)
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, name, point, time_raw AS time, teacher FROM public.course WHERE id IN ({placeholders})",
+            ids,
+        )
+        rows = cur.fetchall()
+        cur.close()
     finally:
         conn.close()
 
@@ -75,7 +105,7 @@ def schedule_tool(
     """當已有一批候選課程 id、要從中排出無衝堂且學分達標的課表時呼叫此工具。
 
     參數:
-    - course_ids: 候選課程的 13 位 id,用逗號分隔(來自 query_courses_tool 的結果)
+    - course_ids: 候選課程的 13 位 id,用逗號分隔(來自 retrieve_tool 的結果)
     - min_credits / max_credits: 學分下限 / 上限
     - avoid_weekdays: 要避開的星期,中文字逗號分隔(如 "五" 或 "一,五"),沒有就留空
     - max_results: 最多回傳幾組方案(預設 3)
@@ -85,7 +115,7 @@ def schedule_tool(
     try:
         ids = _split_ids(course_ids)
         if not ids:
-            return "ERROR: course_ids 為空,請先用 query_courses_tool 取得候選課程 id。"
+            return "ERROR: course_ids 為空,請先用 retrieve_tool 取得候選課程 id。"
         if min_credits > max_credits:
             return f"ERROR: 學分下限 {min_credits} 大於上限 {max_credits}。"
 
@@ -109,7 +139,7 @@ def schedule_tool(
             )
             if avoid:
                 hint += f"(已排除星期 {''.join(avoid)})"
-            hint += " 可放寬學分範圍或用 query_courses_tool 增加候選課程。"
+            hint += " 可放寬學分範圍或用 retrieve_tool 增加候選課程。"
             return hint
 
         # validate 不可跳過:剪枝過也要再驗一次,擋掉任何漏網違規

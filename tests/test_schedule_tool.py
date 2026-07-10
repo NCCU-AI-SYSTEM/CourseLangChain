@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from tools import query_courses as qc_mod
 from tools.query_courses import query_courses_tool
+from tools import retrieve as retrieve_mod
 from tools.schedule_tool import _split_ids, schedule_tool
 
 _PASS = 0
@@ -94,9 +94,9 @@ def test_query_courses_format() -> None:
                           "teacher": "呂老師", "point": 3}),
             ]
 
-    qc_mod._retriever = _FakeRetriever()  # 注入假 retriever,跳過 pickle 載入
+    retrieve_mod._retriever = _FakeRetriever()  # 注入假 retriever,跳過 pickle 載入
     out = query_courses_tool.invoke({"keyword": "管理", "top_k": 5})
-    qc_mod._retriever = None  # 還原
+    retrieve_mod._retriever = None  # 還原
     check("course_id: 1142000348021" in out, "輸出含 13 位 course_id")
     check("學分: 3" in out and "老師: 李老師" in out, "輸出含學分與老師")
 
@@ -119,7 +119,7 @@ def test_registry() -> None:
 
     names = {getattr(t, "name", "") for t in all_tools()}
     check("schedule_tool" in names, "schedule_tool 已註冊")
-    check("query_courses_tool" in names, "query_courses_tool 已註冊")
+    check("retrieve_tool" in names, "retrieve_tool 已註冊")
 
 
 if __name__ == "__main__":

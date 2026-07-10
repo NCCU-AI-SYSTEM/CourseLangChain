@@ -18,6 +18,17 @@ VECTORSTORE_PKL = os.path.join(PROJECT_ROOT, "vectorstore.pkl")
 COURSE_YEAR = os.getenv("COURSE_YEAR", "114")
 COURSE_SEMESTER = os.getenv("COURSE_SEMESTER", "2")
 
+# PostgreSQL hybrid search toggle
+# true  = SQLite + vectorstore.pkl (original, no Docker needed)
+# false = PostgreSQL + pgvector + pg_bm25 (run `docker compose up embedder` first)
+USE_SQLITE = os.getenv("USE_SQLITE", "true").lower() == "true"
+
+# PostgreSQL connection string (only used when USE_SQLITE=false)
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/academic",
+)
+
 # 使用者自校務系統匯出的成績單 JSON(可選、含個資)。預設放專案根,
 # 由 .gitignore 擋下不進 git;沒這個檔時個人化功能自動略過。
 USER_RECORD_JSON = os.getenv(

@@ -3,7 +3,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
+from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, DATABASE_URL, USE_SQLITE
 
 _FIELD_TRUNCATE = 800
 
@@ -106,6 +106,9 @@ def course_detail_tool(
     ]
     select_cols = ", ".join(columns)
 
+    if not USE_SQLITE:
+        return _fetch_pg(select_cols, course_name, course_id)
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -137,6 +140,43 @@ def course_detail_tool(
         # 最常見:db_path 指到空檔(no such table: COURSE)→ 資料庫沒掛好/路徑錯。
         return f"ERROR: 課程資料庫無法查詢({e})。請確認 data.db 已就緒。"
     finally:
+        conn.close()
+
+    if not rows:
+        return f"找不到名稱包含「{course_name}」的課程。"
+    if len(rows) == 1:
+        return _format_one(rows[0])
+    return _format_candidates(rows)
+
+
+def _fetch_pg(select_cols: str, course_name: str, course_id: Optional[str]) -> str:
+    import psycopg2
+    import psycopg2.extras
+
+    select_cols_pg = select_cols.replace("time", "time_raw AS time")
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        if course_id:
+            cur.execute(
+                f"SELECT {select_cols_pg} FROM public.course WHERE id = %s LIMIT 1",
+                (course_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return f"找不到 course_id={course_id} 的課程。"
+            return _format_one(dict(row))
+        cur.execute(
+            f"SELECT {select_cols_pg} FROM public.course "
+            f"WHERE name LIKE %s AND y = %s AND s = %s "
+            f"LIMIT 10",
+            (f"%{course_name}%", COURSE_YEAR, COURSE_SEMESTER),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        return f"ERROR: 課程資料庫無法查詢({e})。"
+    finally:
+        cur.close()
         conn.close()
 
     if not rows:
