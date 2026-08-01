@@ -5,6 +5,8 @@ from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import OllamaLLM
 
+from .registry import register_tool
+
 load_dotenv(override=True)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -72,3 +74,6 @@ time 欄位格式說明：
     if hasattr(result, "content"):
         return result.content.strip()
     return str(result).strip()
+
+
+register_tool(text_to_sql_tool)

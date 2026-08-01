@@ -138,7 +138,7 @@ def test_brain_agent_wiring() -> None:
 
         names = {getattr(t, "name", "") for t in all_tools()}
         check({"query_courses_tool", "schedule_tool"} <= names, "排課兩 tool 在 registry")
-        check(brain_agent is not None, "brain_agent 建構成功(含 4 個 tool)")
+        check(brain_agent is not None, "brain_agent 建構成功(含全部已註冊 tool)")
     except Exception as e:  # noqa: BLE001
         check(False, f"brain_agent import/建構失敗:{type(e).__name__}: {e}")
 

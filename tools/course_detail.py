@@ -5,6 +5,8 @@ from langchain_core.tools import tool
 
 from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
 
+from .registry import register_tool
+
 _FIELD_TRUNCATE = 800
 
 
@@ -144,3 +146,6 @@ def course_detail_tool(
     if len(rows) == 1:
         return _format_one(rows[0])
     return _format_candidates(rows)
+
+
+register_tool(course_detail_tool)

@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 
 import fire
 from dotenv import load_dotenv
@@ -48,10 +49,18 @@ class CourseLangGraph:
         self.executor = SafeAgentExecutor(brain_agent)
         logger.info("Brain Agent (ReAct) ready,三層 harness 已啟用。")
 
-    def _base_config(self) -> dict:
-        return {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+    def _base_config(self, thread_id: str | None = None) -> dict:
+        """組 LangGraph config。
 
-    def invoke(self, user_input: str) -> str:
+        thread_id 是對話記憶的鍵:同一個 thread_id 的多輪才會共用歷史。
+        沒帶時發一個一次性 id——agent 掛了 checkpointer,少了 thread_id 會直接 raise,
+        用一次性 id 等同「這輪無記憶」,比讓呼叫端炸掉好。
+        """
+        config: dict = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+        config["configurable"] = {"thread_id": thread_id or f"ephemeral-{uuid.uuid4()}"}
+        return config
+
+    def invoke(self, user_input: str, thread_id: str | None = None) -> str:
         # L1:輸入清理
         text, is_safe = sanitize_input(user_input)
         if not is_safe:
@@ -59,7 +68,7 @@ class CourseLangGraph:
             return _REJECT_MSG
 
         # L2:安全外殼執行(永不 raise)
-        result = self.executor.run(text, config=self._base_config())
+        result = self.executor.run(text, config=self._base_config(thread_id))
         output = result["output"]
         logger.info(
             "agent done: steps=%s elapsed=%ss error=%s",
@@ -75,7 +84,7 @@ class CourseLangGraph:
             return _INVALID_OUTPUT_MSG
         return output
 
-    async def astream(self, user_input: str):
+    async def astream(self, user_input: str, thread_id: str | None = None):
         # L1:輸入清理(串流路徑同樣先擋)
         text, is_safe = sanitize_input(user_input)
         if not is_safe:
@@ -86,7 +95,10 @@ class CourseLangGraph:
         # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
         # 不套用(會切斷已輸出的 token)。L3 輸出驗證亦因逐 token 串流無法即時套用,
         # 改在非串流 invoke 路徑把關。
-        config = {**self._base_config(), "recursion_limit": self.executor.recursion_limit}
+        config = {
+            **self._base_config(thread_id),
+            "recursion_limit": self.executor.recursion_limit,
+        }
         async for event in self.brain_agent.astream_events(
             {"messages": [{"role": "user", "content": text}]},
             config=config,
@@ -102,12 +114,18 @@ class CourseLangGraph:
 
 async def main():
     agent = CourseLangGraph(cli=True)
+    # 整個 REPL 共用一個 thread_id,多輪追問才接得起來(輸入 new 可開新對話)
+    thread_id = f"cli-{uuid.uuid4()}"
     while True:
         query = input("User: ")
         if query.lower() in ["exit", "quit", "q"]:
             break
+        if query.lower() == "new":
+            thread_id = f"cli-{uuid.uuid4()}"
+            print("(已開始新對話,先前的上下文不再沿用)\n")
+            continue
         print("Bot:")
-        result = agent.invoke(query)
+        result = agent.invoke(query, thread_id=thread_id)
         print(result)
         print()
     if langfuse_handler:

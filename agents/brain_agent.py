@@ -1,12 +1,14 @@
 import os
 
 from dotenv import load_dotenv
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, trim_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from tools.course_detail import course_detail_tool
+from tools.my_schedule import my_schedule_tool
 from tools.query_courses import query_courses_tool
 from tools.schedule_tool import schedule_tool
 from tools.text_to_sql import text_to_sql_tool
@@ -34,7 +36,12 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 4. schedule_tool(course_ids: str, min_credits: float, max_credits: float, avoid_weekdays: str, max_results: int) -> str
    排課:接一串逗號分隔的 course_id,排出「無衝堂、學分達標」的課表方案。
    course_ids 一律從 query_courses_tool 的結果原樣抄過來,不可自己編造。avoid_weekdays 用中文字逗號分隔(如 "五")。
-5. user_profile_tool(record_path: str) -> str
+5. my_schedule_tool(action: str, course_id: str) -> str
+   讀寫使用者「目前已排定的課表」(就是畫面右側課表面板那一份,使用者可能手動改過)。
+   action: view 查看 / add 加課 / remove 移除 / clear 清空。add、remove 需要 13 位 course_id。
+   使用者問「我現在排了什麼 / 幾學分」、要求把課加進或移出課表時用。
+   加課若衝堂,工具會自動移除衝堂舊課——這是預期行為,照實轉述即可。
+6. user_profile_tool(record_path: str) -> str
    讀使用者自帶的成績單,回「去識別化」的修課狀況(已修課、本學期已選、畢業缺口)。這是可選功能。
    當使用者要「個人化排課」、提到自身修課狀況、或要避免重複推薦已修過的課時呼叫。
    若回傳「未提供成績單」之類訊息,就當作沒有這項資訊、照常排課,不要追問或要求使用者提供。
@@ -70,10 +77,11 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 動作(course_id 是橋樑):
 0.(可選,個人化)若使用者要個人化排課、或提到自身修課狀況 → 先 user_profile_tool。
    - 有拿到 profile:用其「學分」推算 min/max、把「已修過 + 本學期已選」當排除清單(別把這些課排進去),畢業缺口可當 query 的關鍵字方向。
+     排除以 profile 給的「排除課號」為準:course_id 的**後 9 碼**等於任一排除課號,就是使用者修過的同一門課,不可排進課表。
    - 回「未提供成績單」就忽略這步,照常排課,不要追問使用者要資料。
 1. query_courses_tool(keyword, top_k=20) 取得候選課程清單(內含每門的 course_id)
    - 排課要多一點候選才排得開,top_k 建議設 20
-2. 從上一步結果把要納入的 course_id 用逗號接起來(若有排除清單,先剔除已修/已選的同名課),呼叫
+2. 從上一步結果把要納入的 course_id 用逗號接起來(若有排除清單,先比對後 9 碼剔除已修/已選的課),呼叫
    schedule_tool(course_ids, min_credits, max_credits, avoid_weekdays)
    - 使用者給「18 學分」這類單一數字時,可設 min_credits 略低、max_credits 等於該值(如 15 與 18)
    - 沒講避開星期就傳空字串
@@ -104,11 +112,47 @@ def _get_chat_llm():
     )
 
 
+# 送進 LLM 的歷史訊息則數上限(不含 system prompt)。
+# 一個「排課回合」約 4~6 則(human + AI tool_call + tool 結果 + AI 回答),
+# 40 則約當最近 7~9 回合。
+#
+# 這個上限不是為了「塞得下」——gemma4:31b-cloud 的 context 是 262144 token,
+# 綽綽有餘。真正的理由是:每輪都會塞進一份 20 門課的候選清單,堆多了會有好幾份
+# 結構幾乎相同、只有數字不同的課表,模型容易抄錯 course_id;順帶也省 cloud 模型的 token 費。
+MAX_HISTORY_MESSAGES = 40
+
+
+def _trim_history(state: dict) -> dict:
+    """pre_model_hook:只裁「送進 LLM 的」訊息,不動 checkpointer 存的完整歷史。
+
+    回傳 `llm_input_messages` 而非 `messages`,是為了不覆寫 state——
+    完整對話仍留在 checkpointer 裡,只有本次餵給模型的視窗被裁短。
+    """
+    trimmed = trim_messages(
+        state["messages"],
+        token_counter=len,  # 以「訊息則數」計,不實際算 token(省一次 tokenizer 往返)
+        max_tokens=MAX_HISTORY_MESSAGES,
+        strategy="last",
+        # 確保視窗開頭是 human:否則可能切出孤兒 ToolMessage(對應的 tool_call 被裁掉),
+        # 多數 provider 會直接回 400。
+        start_on="human",
+        # system prompt 由 create_react_agent 的 prompt= 另外注入,不在 messages 裡
+        include_system=False,
+        allow_partial=False,
+    )
+    return {"llm_input_messages": trimmed}
+
+
 def build_brain_agent():
     """以 create_react_agent 取代原本的 route → sql_gen → validate → retrieve → respond 條件分支。
 
     工具呼叫由 LLM 自行決定（ReAct loop），整體仍可被 main.py / app.py 透過
     invoke / astream_events 介面驅動，與原本 graph 介面相容。
+
+    對話記憶:掛 `InMemorySaver`,呼叫時需帶 `config={"configurable": {"thread_id": ...}}`,
+    同一個 thread_id 的多輪對話才接得起來(意圖 C 的「從先前 messages 找出 course_id」
+    依賴這個)。刻意用 in-memory 而非 SqliteSaver——歷史裡含 user_profile_tool 解析出的
+    修課狀況,落地存檔會牴觸「僅本次使用、不儲存」的隱私承諾。程序重啟即清空。
     """
     return create_react_agent(
         model=_get_chat_llm(),
@@ -118,8 +162,11 @@ def build_brain_agent():
             course_detail_tool,
             schedule_tool,
             user_profile_tool,
+            my_schedule_tool,
         ],
         prompt=SystemMessage(content=SYSTEM_PROMPT),
+        pre_model_hook=_trim_history,
+        checkpointer=InMemorySaver(),
     )
 
 

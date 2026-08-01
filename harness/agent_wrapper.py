@@ -123,10 +123,20 @@ class SafeAgentExecutor:
 
     @staticmethod
     def _count_steps(result: Any) -> int:
-        """以 messages 數扣掉首則 human 當作步數的粗估(telemetry 用)。"""
-        if isinstance(result, dict):
-            return max(0, len(result.get("messages", [])) - 1)
-        return 0
+        """本回合的步數粗估(telemetry 用)= 最後一則 human 之後的訊息數。
+
+        掛上 checkpointer 後 messages 會累積整段對話歷史,不能直接用總長度算,
+        否則第 N 輪的 steps 會把前面幾輪都算進去。
+        """
+        if not isinstance(result, dict):
+            return 0
+        messages = result.get("messages", [])
+        for i in range(len(messages) - 1, -1, -1):
+            m = messages[i]
+            role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None)
+            if role in ("human", "user"):
+                return len(messages) - i - 1
+        return max(0, len(messages) - 1)
 
     def _log_timeout(self, user_input: str) -> None:
         logger.warning("agent timeout(%.0fs): input=%r", self.timeout_sec, user_input[:80])
