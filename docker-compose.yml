@@ -20,6 +20,10 @@ services:
     volumes:
       - ./data.db:/course-langchain/data.db
       - ./vectorstore.pkl:/course-langchain/vectorstore.pkl
+      # bge-m3 嵌入模型約 2.2GB;不掛主機快取的話每次重建容器都要重新下載,
+      # 首次檢索會卡住數分鐘且 CPU 幾乎不動(純網路 I/O)。
+      # 掛到 /home/user 而非 /root:容器以 uid 1000(user) 執行,進不去 /root。
+      - ${HOME}/.cache/huggingface:/home/user/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # deploy:

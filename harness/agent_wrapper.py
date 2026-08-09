@@ -22,7 +22,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = 8
 # 預設放寬到 120s:首次呼叫檢索工具會載入 ~2GB 的 vectorstore.pkl,30s 不夠。
-DEFAULT_TIMEOUT_SEC = 120.0
+#
+# 2026-08-08 再放寬到 300s。實測本機(WSL2、4 核 CPU、GPU 因 MX130 的 CUDA
+# backend 會 SIGSEGV 而停用,見 .ai_docs/STATE.md 已知問題 #4)帶本專案真實的
+# 3087 字元 SYSTEM_PROMPT 時,單次 LLM 呼叫:qwen2:7b 約 196s、llama3.2:1b 約 66s。
+# ReAct 一題要 2~3 次呼叫,120s 會在第一次呼叫就逾時,使用者只會看到
+# 「處理時間過長,請簡化您的要求後重試。」而永遠問不出東西。
+# 注意:這個值只作用在非串流的 invoke 路徑;串流路徑(main.py astream)刻意不套用。
+#
+# 2026-08-08 二次放寬到 900s。300s 只夠「查課」(1~2 次呼叫),但「排課」要走
+# text_to_sql → query_courses → schedule 三到四個工具,等於 4~5 次 LLM 呼叫,
+# 在 i5-8250U(4 核、無 GPU)上約 600~800s。
+# 有 GPU 或改用雲端模型(USE_GOOGLE_AI=true)的環境可以調回 120。
+DEFAULT_TIMEOUT_SEC = 900.0
 
 
 class SafeAgentExecutor:
