@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import pickle
+import re
 import sqlite3
 
 from langchain_classic.retrievers.bm25 import BM25Retriever
@@ -50,6 +51,44 @@ def _format_docs(docs, top_k: int) -> str:
             f"｜學分: {m.get('point', 'N/A')}"
         )
     return "\n".join(lines)
+
+
+# 與 _format_docs 成對的反向解析。main.py 的 astream 攔到 on_tool_end 後用它把
+# 「給 LLM 讀的文字」還原成結構化候選,經 SSE 側通道送前端畫「加入課表」按鈕。
+# 刻意不改 _format_docs 的回傳型別(tool 契約是回 str);兩者相鄰擺放,格式一改就會一起看到。
+_LINE_RE = re.compile(
+    r"^\s*\d+\.\s*(?P<name>.*?)"
+    r"｜course_id:\s*(?P<course_id>\S+?)"
+    r"｜時間:\s*(?P<time>.*?)"
+    r"｜老師:\s*(?P<teacher>.*?)"
+    r"｜學分:\s*(?P<credits>.*?)\s*$"
+)
+
+
+def parse_formatted_docs(text: str) -> list[dict]:
+    """把 _format_docs 的輸出解析回結構化課程清單;解析不到的行直接略過。
+
+    只收「13 碼純數字」的 course_id:工具也可能回「找不到符合條件的課程。」或
+    「ERROR: ...」,那些行對不上格式就自然被濾掉,不會送出半成品給前端。
+    """
+    courses: list[dict] = []
+    for line in (text or "").splitlines():
+        m = _LINE_RE.match(line)
+        if not m:
+            continue
+        course_id = m.group("course_id")
+        if not (course_id.isdigit() and len(course_id) == 13):
+            continue
+        courses.append(
+            {
+                "course_id": course_id,
+                "name": m.group("name").strip(),
+                "time": m.group("time").strip(),
+                "teacher": m.group("teacher").strip(),
+                "credits": m.group("credits").strip(),
+            }
+        )
+    return courses
 
 
 def _bm25_over_sql(keyword: str, sql_filter: str, top_k: int) -> list:

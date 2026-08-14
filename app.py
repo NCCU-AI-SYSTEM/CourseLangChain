@@ -49,9 +49,14 @@ async def generate_streaming(question: str, session_id: str | None = None):
     full_response = ""
     try:
         async for chunk in agent.astream(question, thread_id=session_id):
-            if chunk:
-                full_response += str(chunk)
-                yield f"data: {json.dumps({'data': str(chunk)})}\n\n"
+            if not chunk:
+                continue
+            # dict = 側通道事件(目前只有候選課程清單):原樣送出,不併進文字回覆
+            if isinstance(chunk, dict):
+                yield f"data: {json.dumps(chunk)}\n\n"
+                continue
+            full_response += str(chunk)
+            yield f"data: {json.dumps({'data': str(chunk)})}\n\n"
     except Exception as e:
         # 用 data 欄位回可讀訊息(前端只認 data);否則畫面會顯示 undefined
         msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(e).__name__})"

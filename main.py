@@ -9,6 +9,7 @@ from langfuse.langchain import CallbackHandler
 
 from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
+from tools.query_courses import parse_formatted_docs
 
 load_dotenv(override=True)
 
@@ -40,6 +41,15 @@ ch.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
+
+
+def _tool_output_text(event: dict) -> str:
+    """取 on_tool_end 事件裡的工具回傳文字。
+
+    langgraph 依版本可能給 ToolMessage 物件或原始 str,兩種都要能取到內容。
+    """
+    output = (event.get("data") or {}).get("output")
+    return str(getattr(output, "content", output) or "")
 
 
 class CourseLangGraph:
@@ -85,6 +95,13 @@ class CourseLangGraph:
         return output
 
     async def astream(self, user_input: str, thread_id: str | None = None):
+        """逐段產出回覆。
+
+        yield 兩種型別,呼叫端(app.py)要分開處理:
+        - `str`:LLM 吐出的文字 token
+        - `dict`:側通道事件,目前只有 `{"type": "courses", "courses": [...]}`
+          ——候選課程清單,course_id 直接取自工具輸出,不經 LLM 轉述。
+        """
         # L1:輸入清理(串流路徑同樣先擋)
         text, is_safe = sanitize_input(user_input)
         if not is_safe:
@@ -99,16 +116,30 @@ class CourseLangGraph:
             **self._base_config(thread_id),
             "recursion_limit": self.executor.recursion_limit,
         }
+        seen_ids: set[str] = set()
         async for event in self.brain_agent.astream_events(
             {"messages": [{"role": "user", "content": text}]},
             config=config,
             version="v2",
         ):
-            if event.get("event") == "on_chat_model_stream":
+            kind = event.get("event")
+            if kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 content = getattr(chunk, "content", None)
                 if content:
                     yield content
+            elif kind == "on_tool_end" and event.get("name") == "query_courses_tool":
+                # 側通道:候選課程直接取自工具輸出,不經 LLM 轉述,前端據此畫
+                # 「加入課表」按鈕——徹底避開模型抄錯 13 碼 course_id 的風險。
+                # 排課時同一輪可能查兩次,用 seen_ids 去重。
+                fresh = [
+                    c
+                    for c in parse_formatted_docs(_tool_output_text(event))
+                    if c["course_id"] not in seen_ids
+                ]
+                if fresh:
+                    seen_ids.update(c["course_id"] for c in fresh)
+                    yield {"type": "courses", "courses": fresh}
         logger.info("Brain Agent execution completed")
 
 
