@@ -26,7 +26,11 @@ def check(cond: bool, msg: str) -> None:
 
 
 def _pick_courses() -> tuple[str, str, str]:
-    """從真實 DB 挑三門課:A 與 B 時間完全相同(必衝堂),C 與 A 不衝堂。"""
+    """從真實 DB 挑三門課:A 與 B 時間完全相同(必衝堂),C 與 A 不衝堂。
+
+    三門課**兩兩不同名**:同名課現在會被當成「同一門課的另一個班」互相替換,
+    若挑到同名的組合,衝堂/並存這兩條測試就會測到錯誤的原因(甚至假性失敗)。
+    """
     conn = sqlite3.connect(DATA_DB)
     try:
         rows = conn.execute(
@@ -37,27 +41,67 @@ def _pick_courses() -> tuple[str, str, str]:
     finally:
         conn.close()
 
+    name_of = {cid: n for cid, n, _t in rows}
     by_time: dict[str, list[str]] = {}
     for cid, _name, t in rows:
         by_time.setdefault(t, []).append(cid)
 
-    # 找一組同時段的兩門課
-    same = next(ids for ids in by_time.values() if len(ids) >= 2)
-    a, b = same[0], same[1]
-    a_time = next(t for t, ids in by_time.items() if ids[0] == a)
+    # 找一組同時段、但不同名的兩門課(確保被移除的原因是衝堂,不是同名)
+    a, b = next(
+        (c1, c2)
+        for ids in by_time.values()
+        for c1 in ids
+        for c2 in ids
+        if c1 != c2 and name_of[c1] != name_of[c2]
+    )
+    a_time = next(t for t, ids in by_time.items() if a in ids)
 
-    # 找一門完全不共用星期的課,確保不衝堂
+    # 找一門完全不共用星期、且與 A 不同名的課,確保能並存
     a_weekdays = {ch for ch in a_time if ch in "一二三四五六日"}
     c = next(
         ids[0]
         for t, ids in by_time.items()
         if not ({ch for ch in t if ch in "一二三四五六日"} & a_weekdays)
+        and name_of[ids[0]] != name_of[a]
     )
     return a, b, c
 
 
+def _pick_same_name_pair() -> tuple[str, str]:
+    """挑同名、但星期完全不重疊的兩門課 —— 也就是「同一門課的不同班,時間不衝突」。
+
+    這正是舊行為漏掉的情形:時間不衝突所以 has_conflict 放行,但實際上選課系統
+    不讓你同時修兩班。
+    """
+    conn = sqlite3.connect(DATA_DB)
+    try:
+        rows = conn.execute(
+            "SELECT id, name, time FROM COURSE WHERE y = ? AND s = ? "
+            "AND time IS NOT NULL AND time != ''",
+            (COURSE_YEAR, COURSE_SEMESTER),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    def weekdays(t: str) -> set[str]:
+        return {ch for ch in t if ch in "一二三四五六日"}
+
+    by_name: dict[str, list[tuple[str, str]]] = {}
+    for cid, name, t in rows:
+        by_name.setdefault(name, []).append((cid, t))
+
+    for items in by_name.values():
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (id1, t1), (id2, t2) = items[i], items[j]
+                if id1 != id2 and not (weekdays(t1) & weekdays(t2)):
+                    return id1, id2
+    raise RuntimeError("DB 中找不到「同名且星期不重疊」的兩門課,無法測試同名替換")
+
+
 SID = "test-session-schedule"
 A, B, C = _pick_courses()
+D1, D2 = _pick_same_name_pair()
 
 
 def test_add_and_view() -> None:
@@ -84,8 +128,23 @@ def test_conflict_overwrites() -> None:
     check(r["ok"], "加入衝堂課仍然成功(覆蓋語意)")
     check(len(r["removed"]) == 1, "回報有 1 門被移除")
     check(r["removed"][0].course_id == A, "被移除的正是衝堂的舊課")
+    check(r["removed_reasons"].get(A) == "conflict", "移除原因標記為 conflict")
     ids = [c.course_id for c in store.get_schedule(SID)]
     check(ids == [B], f"課表只剩新課(得到 {ids})")
+
+
+def test_same_name_overwrites() -> None:
+    print("[同名課替換 —— 同一門課的另一個班,時間不衝突也要換掉]")
+    store.clear_schedule(SID)
+    store.add_course(SID, D1)
+    r = store.add_course(SID, D2)
+
+    check(r["ok"], "加入同名課仍然成功(替換語意)")
+    check(len(r["removed"]) == 1, "回報有 1 門被移除")
+    check(r["removed"][0].course_id == D1, "被移除的正是同名的舊課")
+    check(r["removed_reasons"].get(D1) == "same_name", "移除原因標記為 same_name")
+    ids = [c.course_id for c in store.get_schedule(SID)]
+    check(ids == [D2], f"課表只剩新加入的那一班(得到 {ids})")
 
 
 def test_no_conflict_coexists() -> None:
@@ -189,9 +248,13 @@ def test_credits_and_payload() -> None:
 
 
 if __name__ == "__main__":
-    print(f"(測試用課程:A={A} B={B}(與A同時段) C={C}(與A不衝堂))\n")
+    print(
+        f"(測試用課程:A={A} B={B}(與A同時段) C={C}(與A不衝堂)"
+        f" D1={D1} D2={D2}(與D1同名、星期不重疊))\n"
+    )
     test_add_and_view()
     test_conflict_overwrites()
+    test_same_name_overwrites()
     test_no_conflict_coexists()
     test_remove_and_clear()
     test_session_isolation()

@@ -136,7 +136,8 @@ async def get_schedule(session_id: str | None = None):
 
 @app.post("/api/schedule")
 async def add_to_schedule(payload: dict = Body(...)):
-    """加一門課。衝堂時自動移除衝堂的舊課(回傳 removed 讓前端提示使用者)。"""
+    """加一門課。衝堂、或加入同一門課的另一個班時,自動移除舊的那幾門
+    (回傳 removed 與 removed_reasons 讓前端照實提示使用者)。"""
     session_id = _require_session(payload.get("session_id"))
     course_id = str(payload.get("course_id") or "").strip()
     if not course_id:
@@ -149,6 +150,8 @@ async def add_to_schedule(payload: dict = Body(...)):
         **_schedule_payload(session_id),
         "added": session_schedule.to_dicts([result["added"]])[0],
         "removed": session_schedule.to_dicts(result["removed"]),
+        # {course_id: "same_name"|"conflict"} —— 前端據此決定提示措辭
+        "removed_reasons": result.get("removed_reasons", {}),
         "already": result["already"],
     }
 

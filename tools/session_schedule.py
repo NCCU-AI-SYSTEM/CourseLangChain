@@ -70,41 +70,67 @@ def total_credits(courses: list[CourseSlot]) -> float:
 
 
 def add_course(session_id: str, course_id: str, db_path: str = DATA_DB) -> dict:
-    """加一門課進課表;**與現有課衝堂就覆蓋掉衝突的那幾門**。
+    """加一門課進課表;**衝堂、或是同一門課的另一個班,都會覆蓋掉舊的那幾門**。
 
     Returns:
         {"ok": bool, "added": CourseSlot|None, "removed": [CourseSlot],
+         "removed_reasons": {course_id: "same_name"|"conflict"},
          "error": str|None, "already": bool}
     """
     course_id = str(course_id).strip()
     if not course_id:
-        return {"ok": False, "added": None, "removed": [], "error": "缺少課程代碼", "already": False}
+        return {
+            "ok": False, "added": None, "removed": [], "removed_reasons": {},
+            "error": "缺少課程代碼", "already": False,
+        }
 
     course = _fetch_course(course_id, db_path)
     if course is None:
         return {
-            "ok": False, "added": None, "removed": [], "already": False,
+            "ok": False, "added": None, "removed": [], "removed_reasons": {}, "already": False,
             "error": f"找不到課程代碼 {course_id}(本學期 {COURSE_YEAR}-{COURSE_SEMESTER} 無此課)",
         }
 
     with _LOCK:
         current_ids = list(_STORE.get(session_id, []))
         if course_id in current_ids:
-            return {"ok": True, "added": course, "removed": [], "error": None, "already": True}
+            return {
+                "ok": True, "added": course, "removed": [], "removed_reasons": {},
+                "error": None, "already": True,
+            }
         if len(current_ids) >= MAX_COURSES:
             return {
-                "ok": False, "added": None, "removed": [], "already": False,
+                "ok": False, "added": None, "removed": [], "removed_reasons": {}, "already": False,
                 "error": f"課表已達上限 {MAX_COURSES} 門,請先移除部分課程",
             }
 
         existing = _fetch_many(current_ids, db_path)
-        # 衝堂的舊課要讓位。時間未定的課 slots 為空,不會與任何課衝突,故不受影響。
-        removed = [c for c in existing if has_conflict(c, course)]
-        removed_ids = {c.course_id for c in removed}
+        # 舊課讓位的兩種情形:
+        # 1. same_name —— 同一門課的另一個班。一張課表只能有一門,與 scheduler.py
+        #    `validate_schedule` 的「重複修課」規則同調;沒有這條的話,排課排不出來的
+        #    組合(schedule_tool 的 DFS 會跳過同名),手動加課卻塞得進來。
+        #    時間不衝突也要換,所以先判它——選課系統本來就不讓你同時修兩班。
+        # 2. conflict —— 時間重疊。時間未定的課 slots 為空,不與任何課衝突,故不受影響。
+        removed_reasons: dict[str, str] = {}
+        for c in existing:
+            if c.name == course.name:
+                removed_reasons[c.course_id] = "same_name"
+            elif has_conflict(c, course):
+                removed_reasons[c.course_id] = "conflict"
+        removed = [c for c in existing if c.course_id in removed_reasons]
 
-        _STORE[session_id] = [i for i in current_ids if i not in removed_ids] + [course_id]
+        _STORE[session_id] = [
+            i for i in current_ids if i not in removed_reasons
+        ] + [course_id]
 
-    return {"ok": True, "added": course, "removed": removed, "error": None, "already": False}
+    return {
+        "ok": True,
+        "added": course,
+        "removed": removed,
+        "removed_reasons": removed_reasons,
+        "error": None,
+        "already": False,
+    }
 
 
 def remove_course(session_id: str, course_id: str) -> bool:

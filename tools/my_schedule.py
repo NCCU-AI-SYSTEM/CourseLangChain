@@ -45,7 +45,8 @@ def my_schedule_tool(
     - action: "view" 查看 / "add" 加課 / "remove" 移除 / "clear" 清空
     - course_id: action 為 add 或 remove 時必填,13 位課程代碼(照抄 query_courses_tool 的結果)
 
-    加課時若與課表現有課程衝堂,會**自動移除衝堂的舊課**再加入新課,並在回覆中說明。
+    加課時若與課表現有課程衝堂、或加入的是同一門課的另一個班(一張課表只能有一門),
+    會**自動移除舊的那幾門**再加入新課,並在回覆中說明移除原因。
     """
     session_id = _session_of(config)
     if not session_id:
@@ -84,11 +85,15 @@ def my_schedule_tool(
             return _render(session_id, f"{added.name} 已經在課表裡了,未重複加入。")
         removed = result["removed"]
         if removed:
-            names = "、".join(f"{c.name}({c.time_str})" for c in removed)
-            prefix = (
-                f"已加入 {added.name}({added.time_str or '時間未定'})。"
-                f"因為時間衝突,已移除:{names}。"
+            # 移除原因有兩種,講錯會讓使用者困惑(同名換班時說「時間衝突」是假的)
+            reasons = result.get("removed_reasons", {})
+            names = "、".join(
+                f"{c.name}({c.time_str}"
+                + (",同一門課的另一班" if reasons.get(c.course_id) == "same_name" else ",時間衝突")
+                + ")"
+                for c in removed
             )
+            prefix = f"已加入 {added.name}({added.time_str or '時間未定'})。已移除:{names}。"
         else:
             prefix = f"已加入 {added.name}({added.time_str or '時間未定'})。"
         return _render(session_id, prefix)
