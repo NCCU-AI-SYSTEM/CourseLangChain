@@ -156,6 +156,36 @@ def test_no_conflict_coexists() -> None:
     check(len(store.get_schedule(SID)) == 2, "兩門課並存")
 
 
+def test_terms_and_id_normalize() -> None:
+    print("[學期選單 / 課程代碼補齊]")
+    terms = store.available_terms()
+    check(len(terms) > 0, f"至少回一個學期(得到 {[t['value'] for t in terms]})")
+    check(
+        all(len(t["value"]) == 4 and t["count"] > 0 for t in terms),
+        "每個學期都是 4 碼且有課程數",
+    )
+    current = f"{COURSE_YEAR}{COURSE_SEMESTER}"
+    check(
+        any(t["value"] == current for t in terms),
+        f"目前鎖定的學期 {current} 有出現在選單裡",
+    )
+
+    # 9 碼(全校課程查詢系統複製來的)補上選單學期 → 13 碼
+    nine = A[4:]
+    check(store.normalize_course_id(nine, current) == A, "9 碼 + 學期 → 補成 13 碼")
+    check(store.normalize_course_id(nine) == A, "沒給學期時用系統目前的學期補")
+    check(store.normalize_course_id(A, "1131") == A, "13 碼原樣通過(不被學期覆寫)")
+    check(store.normalize_course_id(f"  {nine} ", current) == A, "前後空白會被清掉")
+    check(store.normalize_course_id("", current) == "", "空字串仍是空的(交給上層回錯誤)")
+    check(store.normalize_course_id("abcdefghi", current) == "abcdefghi", "非數字 9 碼不補")
+
+    # 補齊後真的加得進課表
+    store.clear_schedule(SID)
+    r = store.add_course(SID, store.normalize_course_id(nine, current))
+    check(r["ok"], "用 9 碼補齊後可以成功加課")
+    store.clear_schedule(SID)
+
+
 def test_remove_and_clear() -> None:
     print("[移除 / 清空]")
     store.clear_schedule(SID)
@@ -256,6 +286,7 @@ if __name__ == "__main__":
     test_conflict_overwrites()
     test_same_name_overwrites()
     test_no_conflict_coexists()
+    test_terms_and_id_normalize()
     test_remove_and_clear()
     test_session_isolation()
     test_bad_course_id()

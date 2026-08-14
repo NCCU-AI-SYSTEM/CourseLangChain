@@ -40,6 +40,40 @@ def _fetch_course(course_id: str, db_path: str = DATA_DB) -> CourseSlot | None:
     return make_course(row[0], row[1], row[2], row[3], row[4]) if row else None
 
 
+def available_terms(db_path: str = DATA_DB) -> list[dict]:
+    """回 data.db 裡**實際有課程資料**的學期(新到舊),供課表面板的學期選單使用。
+
+    刻意不寫死年份範圍:寫死的話使用者會選到沒有資料的學期,拿到「找不到課程代碼」
+    而誤以為是 bug。目前 data.db 只有 114-2,所以選單只會有一個選項——這是誠實的,
+    日後灌入其他學期的資料,選單自動變多、前端不必改。
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT y, s, COUNT(DISTINCT id) FROM COURSE "
+            "GROUP BY y, s ORDER BY y DESC, s DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"value": f"{y}{s}", "year": y, "semester": s, "count": n} for y, s, n in rows]
+
+
+def normalize_course_id(raw: str | None, term: str | None = None) -> str:
+    """把使用者輸入的課程代碼補成 13 碼。
+
+    全校課程查詢系統顯示的是 **9 碼科目代號**,但課表用的是 **13 碼**(4 碼學期 + 9 碼)。
+    使用者直接複製 9 碼貼進面板時,用選單選的學期把前綴補上。
+
+    - 9 碼純數字 → 補上 term(沒給就用目前系統鎖定的學期)
+    - 其他一律原樣回傳:13 碼本身已含學期前綴;長度不對的就交給 _fetch_course 回「找不到」
+    """
+    cid = "".join(str(raw or "").split())
+    if len(cid) == 9 and cid.isdigit():
+        prefix = "".join(str(term or "").split()) or f"{COURSE_YEAR}{COURSE_SEMESTER}"
+        return f"{prefix}{cid}"
+    return cid
+
+
 def _fetch_many(ids: list[str], db_path: str = DATA_DB) -> list[CourseSlot]:
     """依 id 清單取課,回傳順序與 ids 一致(查不到的略過)。"""
     if not ids:

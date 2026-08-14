@@ -128,6 +128,19 @@ def _require_session(session_id: str | None) -> str:
     return session_id
 
 
+@app.get("/api/terms")
+async def get_terms():
+    """課表面板的學期選單:data.db 實際有資料的學期 + 目前系統鎖定的學期。
+
+    面板讓使用者先選學期、再貼課程代碼,9 碼(全校課程查詢系統顯示的科目代號)才有辦法
+    補成課表要用的 13 碼;順帶讓「這些是哪個學期的課」在畫面上看得見。
+    """
+    return {
+        "terms": session_schedule.available_terms(),
+        "current": _current_term(),
+    }
+
+
 @app.get("/api/schedule")
 async def get_schedule(session_id: str | None = None):
     """取得這個 session 目前已排定的課表。"""
@@ -139,7 +152,11 @@ async def add_to_schedule(payload: dict = Body(...)):
     """加一門課。衝堂、或加入同一門課的另一個班時,自動移除舊的那幾門
     (回傳 removed 與 removed_reasons 讓前端照實提示使用者)。"""
     session_id = _require_session(payload.get("session_id"))
-    course_id = str(payload.get("course_id") or "").strip()
+    # 面板可能只拿到 9 碼(使用者從全校課程查詢系統複製的科目代號),
+    # 用選單選的學期補成 13 碼;13 碼原樣通過。
+    course_id = session_schedule.normalize_course_id(
+        payload.get("course_id"), payload.get("term")
+    )
     if not course_id:
         raise HTTPException(status_code=400, detail="缺少 course_id")
 
