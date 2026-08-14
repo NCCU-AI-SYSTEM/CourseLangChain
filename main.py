@@ -43,6 +43,19 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
+# on_tool_start 時送給前端的進度文字。刻意做成「工具名 → 人話」的對照表:
+# 工具名不外流,前端只拿到可以直接顯示的句子,也就不必跟著後端的工具清單一起改。
+# 對照不到的工具就不送——寧可不顯示進度,也不要把內部名稱漏出去。
+_TOOL_STATUS = {
+    "text_to_sql_tool": "正在解析時間條件…",
+    "query_courses_tool": "正在查詢課程…",
+    "course_detail_tool": "正在讀課程大綱…",
+    "schedule_tool": "正在排課…",
+    "my_schedule_tool": "正在更新你的課表…",
+    "user_profile_tool": "正在讀取修課紀錄…",
+}
+
+
 def _tool_output_text(event: dict) -> str:
     """取 on_tool_end 事件裡的工具回傳文字。
 
@@ -99,8 +112,10 @@ class CourseLangGraph:
 
         yield 兩種型別,呼叫端(app.py)要分開處理:
         - `str`:LLM 吐出的文字 token
-        - `dict`:側通道事件,目前只有 `{"type": "courses", "courses": [...]}`
-          ——候選課程清單,course_id 直接取自工具輸出,不經 LLM 轉述。
+        - `dict`:側通道事件,目前有兩種
+          - `{"type": "status", "text": ...}`:工具開始執行的進度提示(不含工具名)
+          - `{"type": "courses", "courses": [...]}`:候選課程,course_id 直接取自
+            工具輸出、不經 LLM 轉述
         """
         # L1:輸入清理(串流路徑同樣先擋)
         text, is_safe = sanitize_input(user_input)
@@ -128,6 +143,12 @@ class CourseLangGraph:
                 content = getattr(chunk, "content", None)
                 if content:
                     yield content
+            elif kind == "on_tool_start":
+                # 進度提示。ReAct 在 CPU-only 下一題要數分鐘,中間必須讓使用者
+                # 看得出還在跑;但顯示的是人話,不是工具名。
+                status = _TOOL_STATUS.get(event.get("name") or "")
+                if status:
+                    yield {"type": "status", "text": status}
             elif kind == "on_tool_end" and event.get("name") == "query_courses_tool":
                 # 側通道:候選課程直接取自工具輸出,不經 LLM 轉述,前端據此畫
                 # 「加入課表」按鈕——徹底避開模型抄錯 13 碼 course_id 的風險。
