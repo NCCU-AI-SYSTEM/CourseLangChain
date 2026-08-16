@@ -30,7 +30,7 @@ def _format_one(course: dict) -> str:
     point = course.get("point")
     point_str = f"{point} 學分" if point is not None else "(無)"
     return "\n".join(
-        [ 
+        [
             "## 課程資訊",
             f"- 課程名稱：{course.get('name') or '(無)'}",
             f"- 課程編號：{course.get('id') or '(無)'}",
@@ -60,6 +60,9 @@ def _format_one(course: dict) -> str:
             "",
             "## AI 政策",
             _truncate(course.get("ai_policy")),
+            "",
+            "## 異動資訊",
+            _truncate(course.get("info")),
             "",
             "## 備註",
             _truncate(course.get("note")),
@@ -111,6 +114,7 @@ def course_detail_tool(
         "textbook",
         "teaching_approach",
         "ai_policy",
+        "info",
         "note",
     ]
     select_cols = ", ".join(columns)

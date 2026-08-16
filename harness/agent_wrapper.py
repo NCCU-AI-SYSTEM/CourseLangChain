@@ -22,12 +22,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "8"))
-# 預設 120s:首次查詢要載入 embedding 模型,30s 不夠。
-#
-# 本機模型的速度差距很大 —— 實測 9B 的 thinking 模型在 Apple Silicon 上跑「檢索 20 門
-# 再排課」要 ~165s,120s 會被砍掉。跑得動的機器不該為此加時,跑不動的也不該直接失敗,
-# 所以開成環境變數讓各自調。
-DEFAULT_TIMEOUT_SEC = float(os.getenv("AGENT_TIMEOUT_SEC", "120"))
+# 本機模型的速度差距很大 —— 實測 9B 的 thinking 模型在 Apple Silicon 上,多工具的問句
+# 要 ~400s;首次查詢還要再加上載入 embedding 模型的時間。預設取 600s 是因為超時訊息
+# 看起來像系統壞了、不像設定太小,寧可等。雲端模型快很多,可以用環境變數調小。
+DEFAULT_TIMEOUT_SEC = float(os.getenv("AGENT_TIMEOUT_SEC", "600"))
 
 
 class SafeAgentExecutor:
@@ -123,7 +121,14 @@ class SafeAgentExecutor:
             messages = result.get("messages", [])
             if messages:
                 last = messages[-1]
-                return getattr(last, "content", None) or str(last)
+                content = getattr(last, "content", None)
+                if content is None:          # 不是訊息物件,只能整個印出來
+                    return str(last)
+                # content 是空字串代表「模型這一輪什麼都沒說」,是合法狀態而不是
+                # 缺欄位。這裡若退回 str(last),使用者會拿到整個 AIMessage repr
+                # ——連 token 數與 run id 都在裡面。小模型偶爾會這樣收尾。
+                text = content if isinstance(content, str) else str(content)
+                return text.strip() or "這次沒能組出回覆,請換個問法再試一次。"
         return str(result)
 
     @staticmethod

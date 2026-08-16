@@ -187,6 +187,9 @@ def _sqlite_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
 # ── PostgreSQL path ───────────────────────────────────────────────────────────
 
 _DUP_FACTOR = 8
+# course_chunk holds ~10 rows per course, so the vector side has to scan deeper
+# than the BM25 side to surface the same number of distinct courses.
+_CHUNK_FACTOR = 16
 
 _encoder = None
 _encoder_lock = threading.Lock()
@@ -223,7 +226,7 @@ def _encode_query(keyword: str) -> str:
 def _check_pg_vectors(cur) -> bool:
     global _pg_has_vectors
     if _pg_has_vectors is None:
-        cur.execute("SELECT EXISTS (SELECT 1 FROM public.course WHERE embedding IS NOT NULL)")
+        cur.execute("SELECT EXISTS (SELECT 1 FROM public.course_chunk WHERE embedding IS NOT NULL)")
         _pg_has_vectors = bool(cur.fetchone()[0])
         if not _pg_has_vectors:
             logger.warning(
@@ -250,13 +253,17 @@ bm25 AS (
     ORDER BY rk LIMIT %(cand)s
 ),
 vec_raw AS (
-    SELECT id, embedding <=> %(qvec)s::vector AS dist
-    FROM public.course
-    WHERE y = %(year)s AND s = %(sem)s
-      AND embedding IS NOT NULL
+    -- One row per chunk, so this LIMIT counts chunks rather than courses —
+    -- hence its own, larger budget. vec below collapses them with MIN(dist):
+    -- a course ranks by its single best-matching section.
+    SELECT k.course_id AS id, k.embedding <=> %(qvec)s::vector AS dist
+    FROM public.course_chunk k
+    JOIN public.course c ON c.id = k.course_id
+    WHERE c.y = %(year)s AND c.s = %(sem)s
+      AND k.embedding IS NOT NULL
       {filter}
     ORDER BY dist
-    LIMIT %(raw)s
+    LIMIT %(vec_raw)s
 ),
 vec AS (
     SELECT id, RANK() OVER (ORDER BY MIN(dist)) AS rk
@@ -316,6 +323,7 @@ def _pg_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
         "top_k": top_k,
         "cand": RRF_CANDIDATES,
         "raw": RRF_CANDIDATES * _DUP_FACTOR,
+        "vec_raw": RRF_CANDIDATES * _CHUNK_FACTOR,
         "rrf_k": RRF_K,
     }
 

@@ -20,7 +20,7 @@ embedding)在另一個 repo [`course-data-prep`](#資料從哪裡來),產出一�
 
 ```sh
 cp .env.example .env          # 至少要填 MODEL(用 ollama list 看有哪些)
-cp <某處拿到的>.sql.gz db/init/
+cp <某處拿到的>data.sql.gz db/init/
 
 docker compose up -d postgres # 首次啟動會自動還原 db/init/ 裡的成品
 uv sync
@@ -42,10 +42,15 @@ PostgreSQL 上的混合檢索,BM25 與向量各跑一次,再用 RRF 融合:
 score(course) = 1/(60 + BM25名次) + 1/(60 + 向量名次)
 ```
 
-- **BM25**(ParadeDB `pg_search`,分詞器 `pdb.jieba`):精確詞比對。「資料庫」「某老師的
-  名字」很準,但「我想學怎麼寫程式」斷出來的 我想學/怎麼/寫/程式 完全配不到「程式設計概論」。
-- **向量**(`pgvector` HNSW):語意相近。補上 BM25 漏掉的,但單用會漂(查「資料庫」
-  跑出「資訊管理」)。
+兩路各自擅長的東西,是量出來的,不是猜的(115-1 實測):
+
+- **BM25**(ParadeDB `pg_search`,分詞器 `pdb.jieba`):字面比對,強在**罕見的專有名詞** ——
+  老師名、教科書作者(「Varian」)這種向量放不進語意空間的字。反過來,中文短複合詞是它的弱點:
+  jieba 把「資料庫」切成 資料/庫,查詢又是 OR,於是所有含「資料」的課都進來,「資料庫應用」
+  反而擠不進前八名。
+- **向量**(`pgvector`,逐欄分塊、無索引):語意相近,正好補上那個弱點 —— 同一個「資料庫」
+  查詢,「資料庫應用」的 textbook / schedule / evaluation / objective 四塊全排在最前面。
+  但它對專有名詞無能為力:單用向量查老師名,回的是一堆不相干的語言課。
 - **RRF** 只看名次不看原始分數 —— BM25 分數與 cosine 距離量綱不同,直接相加沒有意義。
   `k=60` 讓「兩路都排前面」贏過「單路第一名」。
 
@@ -64,11 +69,12 @@ score(course) = 1/(60 + BM25名次) + 1/(60 + 向量名次)
 
 ```sh
 # 在 course-data-prep 底下
-docker compose up -d postgres         # 首次啟動時把 raw/ 的原始 SQL 灌進去
+docker compose up -d postgres         # 起自己的資料庫
+LOAD_SQLITE=<爬蟲>.db docker compose --profile load run --rm pgloader
 uv run python -m prep.migrate         # 套 DDL、寫 schema_meta
 uv run python -m prep.populate_time   # time_raw → 結構化時間欄位
-uv run python -m prep.embed           # 課程文字 → 向量(這步吃 GPU)
-uv run python -m prep.dump            # 檢查後產出 out/course-1142.sql.gz
+uv run python -m prep.embed           # 逐欄分塊 → 向量(這步吃 GPU)
+uv run python -m prep.check           # 出貨前檢查,dump 指令見那邊的 README
 ```
 
 embedding 刻意放在 host 上跑:Docker Desktop 在 macOS 沒有 GPU passthrough,Linux 要

@@ -53,7 +53,7 @@ cp .env.example .env
 把成品 `.sql.gz` 放進 `db/init/`:
 
 ```sh
-cp <某處拿到的>course-1142.sql.gz db/init/
+cp <某處拿到的>data.sql.gz db/init/
 ```
 
 > [!IMPORTANT]
@@ -62,14 +62,14 @@ cp <某處拿到的>course-1142.sql.gz db/init/
 > 第二份會因為表已存在而失敗(`ON_ERROR_STOP=1` → 容器起不來)。
 >
 > 這個 repo **只收準備好的成品**。原始課程 SQL 屬於資料準備階段,請放
-> [`course-data-prep/raw/`](../../course-data-prep/README.md),不要放這裡。
+> [`course-data-prep`](../../course-data-prep/README.md),不要放這裡。
 
 ## 2-3. 起資料庫
 
 ```sh
 docker compose up -d postgres
 docker compose logs postgres | grep initdb
-# /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/course-1142.sql.gz
+# /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/data.sql.gz
 ```
 
 還原是 postgres 官方 entrypoint 原生做的(`.sql.gz` 會自動 gunzip 後餵給
@@ -77,16 +77,20 @@ docker compose logs postgres | grep initdb
 
 > [!IMPORTANT]
 > restore **只在資料庫第一次建立時**發生(容器 initdb 機制)。換 dump 要先
-> `docker compose down -v` 清掉 volume,否則新檔案不會生效,而且不會有任何錯誤訊息。
+> `docker compose --profile app down -v` 清掉 volume,否則新檔案不會生效,
+> 而且不會有任何錯誤訊息。(`--profile app` 的理由見 2-4(B)。)
 
 檢查資料進去了:
 
 ```sh
 docker compose exec postgres psql -U postgres -d academic -c \
-  "SELECT COUNT(*) courses, COUNT(embedding) vecs FROM course WHERE y='114' AND s='2';"
-#  courses | vecs
-#     3472 | 3472     ← 兩個數字要一樣,不然檢索會退化成純 BM25
+  "SELECT (SELECT COUNT(DISTINCT id) FROM course) courses,
+          (SELECT COUNT(*) FROM course_chunk) chunks;"
+#  courses | chunks
+#     2925 |  28634     ← chunks 為 0 的話檢索會退化成純 BM25
 ```
+
+向量存在 `course_chunk`(一門課約 10 塊),不是 `course` 的欄位。
 
 ## 2-4. 跑 app —— 兩種方式擇一
 
@@ -105,6 +109,33 @@ CLI 版:`uv run python main.py`
 docker compose --profile app up -d
 ```
 
+> [!NOTE]
+> **第一次查詢會慢好幾分鐘。** query encoder(`BAAI/bge-base-zh-v1.5`,約 400MB)
+> 沒有打進 image,是第一次查詢時才下載的。下載期間那個請求就一直掛著,看起來像當掉。
+> 快取放在 `hfcache` volume,所以只有第一次要等 —— 重建容器、`--build` 都不會重抓,
+> 只有 `down -v` 會。想先暖起來:
+> ```sh
+> docker compose exec app python -c \
+>   "from tools.retrieve import _get_encoder; _get_encoder()"
+> ```
+> host 上已經有這個模型的話(跑過 course-data-prep 就會有),直接複製更快。
+> **`mkdir` 那行不能省** —— `docker cp` 在目標目錄不存在時會把來源*當成*該目錄,
+> 結果是模型內容被攤平進 `hub/`,快取看起來有 781MB 卻完全找不到模型:
+> ```sh
+> docker compose exec -u root app mkdir -p /home/user/.cache/huggingface/hub
+> docker cp ~/.cache/huggingface/hub/models--BAAI--bge-base-zh-v1.5 \
+>   courselangchain-app-1:/home/user/.cache/huggingface/hub/
+> docker compose exec -u root app chown -R user:user /home/user/.cache/huggingface
+> # 確認:應該印出 models--BAAI--bge-base-zh-v1.5
+> docker compose exec app ls /home/user/.cache/huggingface/hub
+> ```
+
+> [!IMPORTANT]
+> **`down` 要帶 `--profile app`。** app 服務在 profile 底下,`docker compose down -v`
+> 不帶 profile **不會移除 app 容器** —— 它會活下來繼續跑舊 image 的舊程式碼,
+> 而資料庫已經換過了。症狀是查詢報 `column does not exist` 之類、但你確定改過那段碼。
+> 換資料或改程式後重來:`docker compose --profile app down -v`。
+
 > [!IMPORTANT]
 > Ollama 預設只聽 `127.0.0.1`,容器連不到,查詢會回「系統暫時無法處理您的要求」。
 > 要讓它聽所有介面:
@@ -119,11 +150,16 @@ docker compose --profile app up -d
 ## 2-5. 確認能動
 
 ```sh
-curl -s --get --data-urlencode "question=給我關於資料庫的課" \
+curl -s --get --data-urlencode "question=我想學怎麼寫程式，推薦一門課" \
      --data "stream=false" http://localhost:8000/api/ask
 ```
 
-應該會看到 Markdown 表格,第一列是「資料庫系統」。
+應該會看到「程式設計概論」。這句話刻意挑過:斷詞後是 我想學/怎麼/寫/程式,一個字都對不上
+課名,BM25 單獨跑是找不到的 —— 回得出來就代表向量那路真的有在作用。
+
+(別拿課名去驗。「資料庫」這種中文短複合詞會被 jieba 切開,BM25 反而不準,見
+[README](../README.md#檢索怎麼做的);而且課名是逐學期變的,拿某一門課當驗證基準,
+換個學期就對不上了。)
 
 跑測試(不依賴 pytest;**要用 `-m`**,直接跑檔案路徑會 `ModuleNotFoundError`):
 
@@ -161,7 +197,7 @@ curl -s -u "pk-lf-...:sk-lf-..." \
 
 # 疑難排解
 
-> embedding / 產 dump 那邊的問題(模型下載失敗、維度不符、HNSW 記憶體不足)看
+> embedding / 產 dump 那邊的問題(模型下載失敗、維度不符)看
 > [`course-data-prep/README.md`](../../course-data-prep/README.md) 的疑難排解。
 
 ### 開機就被擋:「資料成品與 contract.yaml 不一致」
@@ -169,7 +205,7 @@ curl -s -u "pk-lf-...:sk-lf-..." \
 兩個 repo 的 `contract.yaml` 設定值沒對齊,或 dump 是舊的。訊息會直接指出哪個欄位對不上:
 
 ```
-- schema_version: 資料成品是 '6',contract.yaml 是 3
+- schema_version: 資料成品是 '8',contract.yaml 是 7
 ```
 
 這是刻意的 —— 模型/維度不一致時檢索**不會報錯**,只會安靜地回一堆語意無關的課,
@@ -193,14 +229,27 @@ disagree with the data.
 
 沒有 `down -v`。restore 只在 volume 全新時跑。
 
+如果 `down -v` 跑了還是沒生效,檢查有沒有帶 `--profile app` —— 不帶的話 app 容器不會被
+移除,它會拿舊 image 的舊程式碼去查新資料庫。
+
 ### 查詢回「處理時間過長」
 
-harness 預設 120 秒。本機模型差很多 —— 9B 的 thinking 模型在 Apple Silicon 上跑
-「檢索 20 門再排課」約需 165 秒。調大:
+harness 預設 600 秒,這個值已經照本機模型抓過:9B 的 thinking 模型跑「檢索 20 門再排課」
+約 165 秒,帶時間條件的問句要多跑一次 `text_to_sql_tool`(多一輪完整 LLM 來回),
+實測 5 步 397 秒。還是不夠就改 `.env`:
 
 ```sh
-AGENT_TIMEOUT_SEC=600 uv run python app.py
+AGENT_TIMEOUT_SEC=900
 ```
+
+host 與容器都吃這一份 —— `paths.py` 用 `load_dotenv` 讀它,compose 也拿它做變數展開。
+改完 host 直接重跑,容器 `docker compose --profile app up -d app`。
+
+雲端模型(Google AI)快得多,可以往下調。
+
+Ollama 一次只跑一個請求。前一個查詢被 client 端砍掉時,伺服器那邊還會繼續算完,
+後面的請求就排在後面等 —— 症狀是連 `curl /api/chat` 都沒反應,但 `/api/tags` 秒回。
+不是當機,等它算完就好;要確認的話看 `ollama runner` 的 CPU 是不是還在動。
 
 ### Docker 跑 app,查詢都回「系統暫時無法處理」
 
@@ -208,5 +257,5 @@ AGENT_TIMEOUT_SEC=600 uv run python app.py
 
 ### 檢索結果很不準
 
-先確認向量有灌進去(見 2-3 的檢查)。`vecs` 少於 `courses` 的話會退化成純 BM25,
+先確認向量有灌進去(見 2-3 的檢查)。`course_chunk` 是空的話會退化成純 BM25,
 對話式問句(「我想學怎麼寫程式」)會明顯變差。

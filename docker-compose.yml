@@ -44,13 +44,18 @@ services:
       EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
       RRF_K: ${RRF_K:-60}
       RRF_CANDIDATES: ${RRF_CANDIDATES:-50}
-      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-120}
+      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-600}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
     volumes:
       - ./contract.yaml:/course-langchain/contract.yaml:ro
+      # The query encoder (~400MB) is downloaded on the first query, not baked
+      # into the image. Without this the download restarts from zero on every
+      # container recreate — and a stalled fetch leaves the first query hanging.
+      - hfcache:/home/user/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "app.py"]
 
 volumes:
   pgdata:
+  hfcache:
