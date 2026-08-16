@@ -1,49 +1,56 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: db/Dockerfile
+    image: paradedb/paradedb:latest
     ports:
       - "5432:5432"
     environment:
       POSTGRES_DB: academic
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    shm_size: 1gb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d academic"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d academic"]
       interval: 5s
       timeout: 5s
       retries: 60
       start_period: 30s
     volumes:
       - pgdata:/var/lib/postgresql/18/docker
-      - ./init-scripts:/docker-entrypoint-initdb.d
+      - ./db/init:/docker-entrypoint-initdb.d:ro
 
-  populator:
+  app:
+    profiles: [app]
     build:
       context: .
-      dockerfile: populator/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
-    restart: no
-
-  embedder:
-    build:
-      context: ./embedder
       dockerfile: Dockerfile
+      target: prod
+      args:
+        PROJECT_PATH: /course-langchain
     depends_on:
-      populator:
-        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    ports:
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
-      MODEL_NAME: google/embeddinggemma-300m
-      HF_TOKEN: ${HF_TOKEN}
-    restart: no
+      USE_SQLITE: "false"
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://host.docker.internal:11434}
+      LANGFUSE_BASE_URL: ${DOCKER_LANGFUSE_BASE_URL:-http://host.docker.internal:3000}
+      MODEL: ${MODEL:-llama3.1:8b}
+      USE_GOOGLE_AI: ${USE_GOOGLE_AI:-false}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
+      RRF_K: ${RRF_K:-60}
+      RRF_CANDIDATES: ${RRF_CANDIDATES:-50}
+      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-120}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+    volumes:
+      - ./contract.yaml:/course-langchain/contract.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "app.py"]
 
 volumes:
   pgdata:

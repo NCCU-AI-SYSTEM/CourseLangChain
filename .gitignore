@@ -19,5 +19,10 @@ user_record.json
 user_record*.json
 !user_record.example.json
 
-# 課程資料 SQL (user-provided, too large for git)
-init-scripts/01-academic.sql
+# 由 course-data-prep 產生的資料成品(太大且會隨學期更新,不進 git)。
+# db/init/ 會被掛成容器的 initdb 目錄,首次啟動時自動還原 *.sql.gz。
+db/init/*
+!db/init/.gitkeep
+# 【已棄用】USE_SQLITE=true 時的檢索索引
+faiss_index/
+courses.jsonl

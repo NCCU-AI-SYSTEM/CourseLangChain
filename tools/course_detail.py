@@ -3,7 +3,16 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, DATABASE_URL, USE_SQLITE
+from warnings import deprecated
+
+from paths import (
+    COURSE_SEMESTER,
+    COURSE_YEAR,
+    DATA_DB,
+    DATABASE_URL,
+    SQLITE_DEPRECATION_MSG,
+    USE_SQLITE,
+)
 
 _FIELD_TRUNCATE = 800
 
@@ -108,7 +117,13 @@ def course_detail_tool(
 
     if not USE_SQLITE:
         return _fetch_pg(select_cols, course_name, course_id)
+    return _fetch_sqlite(select_cols, course_name, course_id, db_path)
 
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _fetch_sqlite(
+    select_cols: str, course_name: str, course_id: Optional[str], db_path: str
+) -> str:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

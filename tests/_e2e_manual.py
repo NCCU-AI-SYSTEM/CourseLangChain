@@ -1,4 +1,4 @@
-"""手動端到端驗證(需連 Ollama + 載入 vectorstore.pkl + 送 Langfuse)。
+"""手動端到端驗證(需連 Ollama + 載入 faiss_index/ + 送 Langfuse)。
 
 跑:`.venv/bin/python -m tests._e2e_manual`
 非自動化測試,故以底線開頭;驗的是「真模型是否照 system prompt 走對工具流程」。

@@ -1,37 +1,112 @@
-"""retrieve_tool — 檢索課程候選,回傳含 13 位 course_id 的清單。
+"""retrieve_tool — course candidate retrieval, returns 13-digit course_ids.
 
-支援兩種資料源:
-- USE_SQLITE=true  (default): 從 data.db + vectorstore.pkl 檢索(沿用舊路徑)
-- USE_SQLITE=false          : 從 PostgreSQL hybrid search 檢索(pgvector + pg_bm25 RRF)
+Two backends, both BM25 + vector fused with RRF:
 
-兩者輸出格式完全相同,對 agent 無感。
+- USE_SQLITE=false (default, the supported one): PostgreSQL, fused in SQL.
+- USE_SQLITE=true  (deprecated): data.db + faiss_index/, fused by EnsembleRetriever.
+
+Same output format, but the two use different embedding models, so rankings differ —
+don't diff them row by row. Data artifacts come from the course-data-prep repo.
 """
 from __future__ import annotations
 
-import os
-import pickle
+import json
+import logging
 import sqlite3
+import threading
+from warnings import deprecated
 
-from langchain_classic.retrievers.bm25 import BM25Retriever
+from langchain_classic.retrievers.ensemble import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB, VECTORSTORE_PKL, USE_SQLITE
+from paths import (
+    COURSES_JSONL,
+    COURSE_SEMESTER,
+    COURSE_YEAR,
+    DATA_DB,
+    FAISS_INDEX_DIR,
+    SQLITE_DEPRECATION_MSG,
+    USE_SQLITE,
+)
 from utils.zh_tokenize import tokenize
 
 from .registry import register_tool
 
-PICKLE_FILE = VECTORSTORE_PKL
+logger = logging.getLogger(__name__)
+
+_MISSING_ARTIFACT_HINT = (
+    "請先用 course-data-prep repo 產生檢索索引(faiss_index/ 與 courses.jsonl),"
+    "並放到專案根目錄。"
+)
 
 _retriever = None
+_retriever_lock = threading.Lock()
 
 
-def _get_retriever(pickle_file: str = PICKLE_FILE):
+# ── SQLite / FAISS path (deprecated — do not add features here) ──────────────
+
+
+def _load_documents(jsonl_path: str) -> list[Document]:
+    docs: list[Document] = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            docs.append(
+                Document(page_content=row["page_content"], metadata=row["metadata"])
+            )
+    return docs
+
+
+def _build_retriever():
+    """Assemble the BM25 + FAISS RRF ensemble from prep's artifacts.
+
+    Not a pickle: pickling the retriever would pin the class path, the langchain
+    version and the embedding device, and loading it would execute arbitrary code.
+    Rebuilding BM25 here also makes k adjustable per query (see _set_k).
+    """
+    from langchain_community.vectorstores import FAISS
+    from langchain_huggingface import HuggingFaceEmbeddings
+
+    from paths import SQLITE_EMBED_MODEL
+
+    docs = _load_documents(COURSES_JSONL)
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name=SQLITE_EMBED_MODEL,
+        model_kwargs={"device": "cpu"},
+    )
+    vectorstore = FAISS.load_local(
+        FAISS_INDEX_DIR, embeddings, allow_dangerous_deserialization=True
+    )
+
+    bm25 = BM25Retriever.from_documents(docs, preprocess_func=tokenize)
+    faiss_retriever = vectorstore.as_retriever()
+    return EnsembleRetriever(retrievers=[bm25, faiss_retriever], weights=[0.5, 0.5])
+
+
+def _get_retriever():
     global _retriever
     if _retriever is None:
-        with open(pickle_file, "rb") as f:
-            _retriever = pickle.load(f)
+        _retriever = _build_retriever()
     return _retriever
+
+
+def _set_k(ensemble, k: int) -> None:
+    """Propagate top_k to both sub-retrievers.
+
+    k=5 used to be baked into the pickle, so scheduling silently got ~10 candidates
+    even though the prompt asks for top_k=20.
+    """
+    for sub in ensemble.retrievers:
+        if hasattr(sub, "search_kwargs"):  # FAISS VectorStoreRetriever
+            sub.search_kwargs["k"] = k
+        else:  # BM25Retriever
+            sub.k = k
 
 
 def _dict_factory(cursor, row):
@@ -65,9 +140,6 @@ def _format_rows(rows, top_k: int) -> str:
     return "\n".join(lines)
 
 
-# ── SQLite path (original) ────────────────────────────────────────────────────
-
-
 def _bm25_over_sql_sqlite(keyword: str, sql_filter: str, top_k: int) -> list:
     conn = sqlite3.connect(DATA_DB)
     conn.row_factory = _dict_factory
@@ -98,11 +170,15 @@ def _bm25_over_sql_sqlite(keyword: str, sql_filter: str, top_k: int) -> list:
     return bm25.invoke(keyword)
 
 
+@deprecated(SQLITE_DEPRECATION_MSG)
 def _sqlite_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
     if sql_filter:
         docs = _bm25_over_sql_sqlite(keyword, sql_filter, top_k)
     else:
-        docs = _get_retriever().invoke(keyword)
+        with _retriever_lock:
+            retriever = _get_retriever()
+            _set_k(retriever, top_k)
+            docs = retriever.invoke(keyword)
     if not docs:
         return "找不到符合條件的課程。"
     return _format_docs(docs, top_k)
@@ -110,51 +186,147 @@ def _sqlite_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
 
 # ── PostgreSQL path ───────────────────────────────────────────────────────────
 
+_DUP_FACTOR = 8
+
+_encoder = None
+_encoder_lock = threading.Lock()
+_pg_has_vectors: bool | None = None
+
+
+def _get_encoder():
+    """Query encoder. Must be the same model prep used to fill the table.
+
+    contract.yaml + check_contract() enforce that: a different model produces
+    incomparable vectors, and retrieval fails silently rather than erroring.
+    """
+    global _encoder
+    if _encoder is None:
+        with _encoder_lock:
+            if _encoder is None:
+                import os
+
+                from sentence_transformers import SentenceTransformer
+
+                from paths import EMBED_MODEL
+
+                device = os.getenv("EMBED_DEVICE", "cpu")
+                logger.info("loading query encoder %s on %s", EMBED_MODEL, device)
+                _encoder = SentenceTransformer(EMBED_MODEL, device=device)
+    return _encoder
+
+
+def _encode_query(keyword: str) -> str:
+    vec = _get_encoder().encode(keyword, show_progress_bar=False)
+    return "[" + ",".join(map(str, vec.tolist())) + "]"
+
+
+def _check_pg_vectors(cur) -> bool:
+    global _pg_has_vectors
+    if _pg_has_vectors is None:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM public.course WHERE embedding IS NOT NULL)")
+        _pg_has_vectors = bool(cur.fetchone()[0])
+        if not _pg_has_vectors:
+            logger.warning(
+                "PostgreSQL 沒有任何 embedding,退回純 BM25 檢索。"
+                "要拿到混合檢索請用 course-data-prep 跑 embed。"
+            )
+    return _pg_has_vectors
+
+
+# `|||` is OR; the default `@@@` is AND and returns 0 rows for conversational queries.
+_RRF_SQL = """
+WITH bm25_raw AS (
+    SELECT id, pdb.score(pk) AS score
+    FROM public.course
+    WHERE content_text ||| %(bm25_q)s
+      AND y = %(year)s AND s = %(sem)s
+      {filter}
+    ORDER BY score DESC
+    LIMIT %(raw)s
+),
+bm25 AS (
+    SELECT id, RANK() OVER (ORDER BY MAX(score) DESC) AS rk
+    FROM bm25_raw GROUP BY id
+    ORDER BY rk LIMIT %(cand)s
+),
+vec_raw AS (
+    SELECT id, embedding <=> %(qvec)s::vector AS dist
+    FROM public.course
+    WHERE y = %(year)s AND s = %(sem)s
+      AND embedding IS NOT NULL
+      {filter}
+    ORDER BY dist
+    LIMIT %(raw)s
+),
+vec AS (
+    SELECT id, RANK() OVER (ORDER BY MIN(dist)) AS rk
+    FROM vec_raw GROUP BY id
+    ORDER BY rk LIMIT %(cand)s
+)
+SELECT * FROM (
+    SELECT DISTINCT ON (c.id)
+           c.id, c.name, c.time_raw AS time, c.teacher, c.point,
+           COALESCE(1.0 / (%(rrf_k)s + b.rk), 0)
+         + COALESCE(1.0 / (%(rrf_k)s + v.rk), 0) AS rrf
+    FROM bm25 b
+    FULL OUTER JOIN vec v ON b.id = v.id
+    JOIN public.course c ON c.id = COALESCE(b.id, v.id)
+    ORDER BY c.id
+) t
+ORDER BY rrf DESC
+LIMIT %(top_k)s
+"""
+
+_BM25_ONLY_SQL = """
+WITH raw AS (
+    SELECT id, pdb.score(pk) AS score
+    FROM public.course
+    WHERE content_text ||| %(bm25_q)s
+      AND y = %(year)s AND s = %(sem)s
+      {filter}
+    ORDER BY score DESC
+    LIMIT %(raw)s
+),
+best AS (
+    SELECT id, MAX(score) AS score FROM raw GROUP BY id ORDER BY score DESC LIMIT %(top_k)s
+)
+SELECT * FROM (
+    SELECT DISTINCT ON (c.id)
+           c.id, c.name, c.time_raw AS time, c.teacher, c.point, b.score
+    FROM best b JOIN public.course c ON c.id = b.id
+    ORDER BY c.id
+) t
+ORDER BY score DESC
+LIMIT %(top_k)s
+"""
+
 
 def _pg_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
-    import jieba
     import psycopg2
     import psycopg2.extras
 
-    from paths import DATABASE_URL
+    from paths import DATABASE_URL, RRF_CANDIDATES, RRF_K
 
-    BM25_INDEX = "idx_course_bm25"
-    YEAR, SEMESTER = COURSE_YEAR, COURSE_SEMESTER
+    filter_sql = f" AND {sql_filter.replace('%', '%%')}" if sql_filter else ""
 
-    bm25_query = " ".join(t for t in jieba.cut(keyword, cut_all=False) if t.strip())
+    params = {
+        "bm25_q": keyword,
+        "year": COURSE_YEAR,
+        "sem": COURSE_SEMESTER,
+        "top_k": top_k,
+        "cand": RRF_CANDIDATES,
+        "raw": RRF_CANDIDATES * _DUP_FACTOR,
+        "rrf_k": RRF_K,
+    }
 
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
     try:
-        # Build WHERE conditions
-        bm25_where = (
-            "y = %(year)s AND s = %(sem)s "
-            "AND content_segmented <@> to_bm25query(%(bm25_q)s, %(bm25_idx)s) < 0"
-        )
-        cols = "id, name, time_raw AS time, teacher, point"
-        order = "score"
-
-        if sql_filter:
-            escaped = sql_filter.replace("%", "%%")
-            bm25_where += " AND " + escaped
-
-        params = {
-            "bm25_q": bm25_query,
-            "bm25_idx": BM25_INDEX,
-            "year": YEAR,
-            "sem": SEMESTER,
-            "top_k": top_k,
-        }
-
-        cur.execute(f"""
-            SELECT {cols},
-                   content_segmented <@> to_bm25query(%(bm25_q)s, %(bm25_idx)s) AS score
-            FROM public.course
-            WHERE {bm25_where}
-            ORDER BY score
-            LIMIT %(top_k)s
-        """, params)
+        if _check_pg_vectors(cur):
+            params["qvec"] = _encode_query(keyword)
+            cur.execute(_RRF_SQL.format(filter=filter_sql), params)
+        else:
+            cur.execute(_BM25_ONLY_SQL.format(filter=filter_sql), params)
         rows = cur.fetchall()
     finally:
         cur.close()
@@ -187,8 +359,8 @@ def retrieve_tool(keyword: str, top_k: int = 10, sql_filter: str = "") -> str:
             return _sqlite_retrieve(keyword, top_k, sql_filter)
         else:
             return _pg_retrieve(keyword, top_k, sql_filter)
-    except FileNotFoundError:
-        return f"ERROR: 找不到向量庫 {PICKLE_FILE},請先執行 build.py 建立索引。"
+    except FileNotFoundError as e:
+        return f"ERROR: 找不到檢索索引({e.filename or e})。{_MISSING_ARTIFACT_HINT}"
     except sqlite3.Error as e:
         return f"ERROR: 課程資料庫無法查詢({e})。請確認 data.db 已就緒。"
     except Exception as e:

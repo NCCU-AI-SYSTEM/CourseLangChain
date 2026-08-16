@@ -1,20 +1,19 @@
 import json as json_mod
-import os
+from warnings import deprecated
 
-from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import OllamaLLM
 
-from paths import USE_SQLITE
+from paths import (
+    GOOGLE_API_KEY,
+    MODEL,
+    OLLAMA_HOST,
+    SQLITE_DEPRECATION_MSG,
+    USE_GOOGLE_AI,
+    USE_SQLITE,
+)
 from tools.constraints import constraints_to_where, parse_timefilter_from_json
-
-load_dotenv(override=True)
-
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL = os.getenv("MODEL")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-USE_GOOGLE_AI = os.getenv("USE_GOOGLE_AI", "false").lower() == "true"
 
 
 def _is_json(s: str) -> bool:
@@ -55,7 +54,16 @@ def text_to_sql_tool(user_input: str) -> str:
 
     if not USE_SQLITE:
         return _pg_json_path(user_input)
+    return _sqlite_glob_path(user_input)
 
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _sqlite_glob_path(user_input: str) -> str:
+    """舊 SQLite 路徑:讓 LLM 直接產 GLOB 字串比對 time 欄位。
+
+    PostgreSQL 路徑改成先產結構化 JSON 再轉 WHERE(_pg_json_path + constraints.py),
+    那條路好得多 —— 新功能請只做在那邊。
+    """
     if USE_GOOGLE_AI:
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",

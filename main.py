@@ -8,8 +8,9 @@ from langfuse.langchain import CallbackHandler
 
 from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
+from paths import check_contract
 
-load_dotenv(override=True)
+load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
 # L1 擋下不安全輸入時回給使用者的訊息
 _REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方式重新提問。"
@@ -43,6 +44,8 @@ logger.addHandler(ch)
 
 class CourseLangGraph:
     def __init__(self, cli: bool = False) -> None:
+        # 資料成品與 contract.yaml 必須對得上,否則寧可不啟動(memo,每個 process 一次)
+        check_contract()
         self.brain_agent = brain_agent
         # L2:把 ReAct graph 包進安全外殼(step / timeout / exception 防護)
         self.executor = SafeAgentExecutor(brain_agent)

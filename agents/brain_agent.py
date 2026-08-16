@@ -1,6 +1,3 @@
-import os
-
-from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
@@ -12,12 +9,8 @@ from tools.schedule_tool import schedule_tool
 from tools.text_to_sql import text_to_sql_tool
 from tools.user_profile import user_profile_tool
 
-load_dotenv(override=True)
-
-MODEL = os.getenv("MODEL")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-USE_GOOGLE_AI = os.getenv("USE_GOOGLE_AI", "false").lower() == "true"
+# Settings come from paths.py so there is one reader per setting.
+from paths import GOOGLE_API_KEY, MODEL, OLLAMA_HOST, USE_GOOGLE_AI
 
 
 SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。

@@ -14,15 +14,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_STEPS = 8
-# 預設放寬到 120s:首次呼叫檢索工具會載入 ~2GB 的 vectorstore.pkl,30s 不夠。
-DEFAULT_TIMEOUT_SEC = 120.0
+DEFAULT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "8"))
+# 預設 120s:首次查詢要載入 embedding 模型,30s 不夠。
+#
+# 本機模型的速度差距很大 —— 實測 9B 的 thinking 模型在 Apple Silicon 上跑「檢索 20 門
+# 再排課」要 ~165s,120s 會被砍掉。跑得動的機器不該為此加時,跑不動的也不該直接失敗,
+# 所以開成環境變數讓各自調。
+DEFAULT_TIMEOUT_SEC = float(os.getenv("AGENT_TIMEOUT_SEC", "120"))
 
 
 class SafeAgentExecutor:

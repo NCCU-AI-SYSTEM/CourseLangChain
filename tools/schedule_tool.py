@@ -10,10 +10,11 @@ solver / validator / ranker / formatter 都在 tools/scheduler.py(純函數,零 
 from __future__ import annotations
 
 import sqlite3
+from warnings import deprecated
 
 from langchain_core.tools import tool
 
-from paths import DATA_DB, DATABASE_URL, USE_SQLITE
+from paths import DATA_DB, DATABASE_URL, SQLITE_DEPRECATION_MSG, USE_SQLITE
 from tools.scheduler import (
     CourseSlot,
     find_schedules,
@@ -51,6 +52,7 @@ def _fetch_courses(ids: list[str], db_path: str = DB_PATH) -> tuple[list[CourseS
     return _fetch_courses_pg(ids)
 
 
+@deprecated(SQLITE_DEPRECATION_MSG)
 def _fetch_courses_sqlite(ids: list[str], db_path: str) -> tuple[list[CourseSlot], list[str]]:
     placeholders = ",".join("?" for _ in ids)
     conn = sqlite3.connect(db_path)
