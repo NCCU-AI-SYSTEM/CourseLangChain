@@ -51,7 +51,11 @@ services:
       # The query encoder (~400MB) is downloaded on the first query, not baked
       # into the image. Without this the download restarts from zero on every
       # container recreate — and a stalled fetch leaves the first query hanging.
-      - hfcache:/home/user/.cache/huggingface
+      # Linux/WSL 專用修正:具名 volume 的掛載點由 Docker 以 root 建立,而容器以
+      # uid 1000(user) 執行 → 寫不進去,模型下載會 PermissionError,retrieve_tool
+      # 直接回 ERROR。改掛主機的 HF 快取(屬 uid 1000),順便沿用已下載的模型。
+      # macOS 的 Docker Desktop 沒有這個問題,原本的具名 volume 在那邊可用。
+      - ${HOME}/.cache/huggingface:/home/user/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "app.py"]
