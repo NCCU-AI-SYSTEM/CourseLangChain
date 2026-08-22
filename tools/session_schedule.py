@@ -13,8 +13,16 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from warnings import deprecated
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
+from paths import (
+    COURSE_SEMESTER,
+    COURSE_YEAR,
+    DATA_DB,
+    DATABASE_URL,
+    SQLITE_DEPRECATION_MSG,
+    USE_SQLITE,
+)
 from tools.scheduler import CourseSlot, has_conflict, make_course
 
 # session_id -> 已排定的 course_id 清單(保序)
@@ -28,16 +36,41 @@ MAX_COURSES = 30
 
 def _fetch_course(course_id: str, db_path: str = DATA_DB) -> CourseSlot | None:
     """依 13 碼 id 取單門課;鎖當前學年學期,避免撈到歷年同名課。"""
+    cid = str(course_id).strip()
+    row = _fetch_course_sqlite(cid, db_path) if USE_SQLITE else _fetch_course_pg(cid)
+    return make_course(row[0], row[1], row[2], row[3], row[4]) if row else None
+
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _fetch_course_sqlite(course_id: str, db_path: str):
     conn = sqlite3.connect(db_path)
     try:
-        row = conn.execute(
+        return conn.execute(
             "SELECT id, name, point, time, teacher FROM COURSE "
             "WHERE id = ? AND y = ? AND s = ?",
-            (str(course_id).strip(), COURSE_YEAR, COURSE_SEMESTER),
+            (course_id, COURSE_YEAR, COURSE_SEMESTER),
         ).fetchone()
     finally:
         conn.close()
-    return make_course(row[0], row[1], row[2], row[3], row[4]) if row else None
+
+
+def _fetch_course_pg(course_id: str):
+    # PostgreSQL 的時間欄位叫 time_raw,不是 time —— 直接 SELECT time 會 UndefinedColumn
+    import psycopg2
+
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, point, time_raw AS time, teacher FROM public.course "
+            "WHERE id = %s AND y = %s AND s = %s",
+            (course_id, COURSE_YEAR, COURSE_SEMESTER),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row
+    finally:
+        conn.close()
 
 
 def available_terms(db_path: str = DATA_DB) -> list[dict]:
@@ -47,15 +80,37 @@ def available_terms(db_path: str = DATA_DB) -> list[dict]:
     而誤以為是 bug。目前 data.db 只有 114-2,所以選單只會有一個選項——這是誠實的,
     日後灌入其他學期的資料,選單自動變多、前端不必改。
     """
+    rows = _terms_sqlite(db_path) if USE_SQLITE else _terms_pg()
+    return [{"value": f"{y}{s}", "year": y, "semester": s, "count": n} for y, s, n in rows]
+
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _terms_sqlite(db_path: str):
     conn = sqlite3.connect(db_path)
     try:
-        rows = conn.execute(
+        return conn.execute(
             "SELECT y, s, COUNT(DISTINCT id) FROM COURSE "
             "GROUP BY y, s ORDER BY y DESC, s DESC"
         ).fetchall()
     finally:
         conn.close()
-    return [{"value": f"{y}{s}", "year": y, "semester": s, "count": n} for y, s, n in rows]
+
+
+def _terms_pg():
+    import psycopg2
+
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT y, s, COUNT(DISTINCT id) FROM public.course "
+            "GROUP BY y, s ORDER BY y DESC, s DESC"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
 
 
 def normalize_course_id(raw: str | None, term: str | None = None) -> str:
@@ -78,18 +133,42 @@ def _fetch_many(ids: list[str], db_path: str = DATA_DB) -> list[CourseSlot]:
     """依 id 清單取課,回傳順序與 ids 一致(查不到的略過)。"""
     if not ids:
         return []
+    rows = _fetch_many_sqlite(ids, db_path) if USE_SQLITE else _fetch_many_pg(ids)
+    found = {str(r[0]): r for r in rows}
+    return [make_course(*found[i]) for i in ids if i in found]
+
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _fetch_many_sqlite(ids: list[str], db_path: str):
     placeholders = ",".join("?" for _ in ids)
     conn = sqlite3.connect(db_path)
     try:
-        rows = conn.execute(
+        return conn.execute(
             f"SELECT id, name, point, time, teacher FROM COURSE "
             f"WHERE id IN ({placeholders}) AND y = ? AND s = ?",
             [*ids, COURSE_YEAR, COURSE_SEMESTER],
         ).fetchall()
     finally:
         conn.close()
-    found = {str(r[0]): r for r in rows}
-    return [make_course(*found[i]) for i in ids if i in found]
+
+
+def _fetch_many_pg(ids: list[str]):
+    import psycopg2
+
+    placeholders = ",".join("%s" for _ in ids)
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, name, point, time_raw AS time, teacher FROM public.course "
+            f"WHERE id IN ({placeholders}) AND y = %s AND s = %s",
+            [*ids, COURSE_YEAR, COURSE_SEMESTER],
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
 
 
 def get_schedule(session_id: str, db_path: str = DATA_DB) -> list[CourseSlot]:
