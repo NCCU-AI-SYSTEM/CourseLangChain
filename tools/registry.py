@@ -66,9 +66,12 @@ def all_tools() -> list[Any]:
 # ---- 在這裡列出所有 tool 模組,讓它們的 register_tool 副作用觸發 ----
 _TOOL_MODULES: tuple[str, ...] = (
     "tools.echo_tool",               # ← dummy,協作者第一個真實 tool 上線後可移除
+    "tools.text_to_sql",             # 段 2:自然語言時間限制 → SQL WHERE
     "tools.retrieve",                # 段 2:檢索候選課程(回 course_id)
+    "tools.course_detail",           # 段 2:單門課詳情(課綱/評分/教科書)
     "tools.schedule_tool",           # 段 2:接候選 id 排課
     "tools.user_profile",            # 段 3:個人化——讀使用者成績單(可選)
+    "tools.my_schedule",             # 段 3:讀寫 session 已排定課表(與前端面板同步)
 )
 
 _imported = False

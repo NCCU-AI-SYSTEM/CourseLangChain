@@ -14,6 +14,8 @@ from paths import (
     USE_SQLITE,
 )
 from tools.constraints import constraints_to_where, parse_timefilter_from_json
+from .registry import register_tool
+
 
 
 def _is_json(s: str) -> bool:
@@ -147,3 +149,4 @@ def _pg_json_path(user_input: str) -> str:
         return constraints_to_where(tf)
     except Exception as e:
         return f"ERROR: 無法解析時間條件({e})。輸入: {text}"
+register_tool(text_to_sql_tool)
