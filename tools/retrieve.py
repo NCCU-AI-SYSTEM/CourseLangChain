@@ -112,6 +112,17 @@ def _set_k(ensemble, k: int) -> None:
 def _dict_factory(cursor, row):
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
+# 時間是原始代碼,附在結果後面而不是寫進工具說明 —— 讀它的時候要跟資料在同一則訊息裡,
+# 呼叫工具之前看到沒有用。
+_TIME_LEGEND = (
+    "\n\n(時間代碼:星期+節次,一個字串可含多組。"
+    "A=06-07 B=07-08 1=08-09 2=09-10 3=10-11 4=11-12 C=12-13 D=13-14 "
+    "5=14-15 6=15-16 7=16-17 8=17-18 E=18-19 F=19-20 G=20-21 H=21-22。"
+    "早上=1-4、中午=C,D、下午=5-8、晚上=E-H。"
+    "例:三234=星期三 09:00-12:00 上午;一12三EFG=星期一 08:00-10:00 和星期三 18:00-21:00;"
+    "未定或彈性=無固定時間。)"
+)
+
 
 def _format_docs(docs, top_k: int) -> str:
     lines: list[str] = []
@@ -181,7 +192,7 @@ def _sqlite_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
             docs = retriever.invoke(keyword)
     if not docs:
         return "找不到符合條件的課程。"
-    return _format_docs(docs, top_k)
+    return _format_docs(docs, top_k) + _TIME_LEGEND
 
 
 # ── PostgreSQL path ───────────────────────────────────────────────────────────
@@ -342,7 +353,7 @@ def _pg_retrieve(keyword: str, top_k: int, sql_filter: str) -> str:
 
     if not rows:
         return "找不到符合條件的課程。"
-    return _format_rows(rows, top_k)
+    return _format_rows(rows, top_k) + _TIME_LEGEND
 
 
 # ── Tool ──────────────────────────────────────────────────────────────────────
