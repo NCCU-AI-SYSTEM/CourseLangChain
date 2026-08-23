@@ -1,5 +1,18 @@
 # Personalized Course Scheduling Agent Blueprint
 
+> [!WARNING]
+> **這份文件的「現況」註記停在 2026-06,檢索那一段已經過時。**
+> 設計目標與工具切分仍然有效,但以下描述已經不是現在的實作:
+>
+> | 文中寫的 | 現在實際上是 |
+> |---|---|
+> | `query_courses_tool` | `retrieve_tool`(`tools/query_courses.py` 只剩相容轉接) |
+> | FAISS(bge-m3)+ BM25 ensemble | PostgreSQL 上的 ParadeDB `pg_search`(`pdb.jieba`)+ pgvector,在 SQL 裡做 RRF 融合 |
+> | `vectorstore.pkl` / `build.py` | 已刪除;資料成品改由 `course-data-prep` repo 產生 |
+> | `data.db`(SQLite) | 已棄用(`USE_SQLITE`),預設走 PostgreSQL |
+>
+> 目前的架構與安裝流程以 [`SETUP.md`](SETUP.md) 與專案根目錄的 `README.md` 為準。
+
 ## 1. Goal
 
 將目前的單一課程查詢 RAG 系統，重構為「大腦 Agent + 多工具 + 排課引擎」的個人化排課平台。
