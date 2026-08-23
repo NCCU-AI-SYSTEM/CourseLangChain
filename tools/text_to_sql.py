@@ -104,8 +104,14 @@ def _sqlite_glob_path(user_input: str) -> str:
         # num_predict 是保險絲,不是修法 —— 實測它擋不住失控生成(/api/generate 版本
         # 設了 256 仍然 300 秒不返回)。真正讓它停下來的是 reasoning=False。
         # 這裡設 512 純粹是上限:實測輸出 73-324 字、156 tokens,有三倍餘裕。
+        # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+        # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
         llm = ChatOllama(
-            model=MODEL, base_url=OLLAMA_HOST, reasoning=False, num_predict=512
+            model=MODEL,
+            base_url=OLLAMA_HOST,
+            reasoning=False,
+            num_predict=512,
+            temperature=0,
         )
 
     prompt = f"""你是 SQL Agent，專門將時間限制轉換為 SQL WHERE 子句。
@@ -144,8 +150,14 @@ def _pg_json_path(user_input: str) -> str:
         # num_predict 是保險絲,不是修法 —— 實測它擋不住失控生成(/api/generate 版本
         # 設了 256 仍然 300 秒不返回)。真正讓它停下來的是 reasoning=False。
         # 這裡設 512 純粹是上限:實測輸出 73-324 字、156 tokens,有三倍餘裕。
+        # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+        # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
         llm = ChatOllama(
-            model=MODEL, base_url=OLLAMA_HOST, reasoning=False, num_predict=512
+            model=MODEL,
+            base_url=OLLAMA_HOST,
+            reasoning=False,
+            num_predict=512,
+            temperature=0,
         )
 
     prompt = f"""你是課程查詢 Agent，將使用者的時間/課程限制轉換成結構化 JSON。
@@ -154,8 +166,12 @@ def _pg_json_path(user_input: str) -> str:
 {{
   "include_times": [{{"weekday": int(1-7), "start_hour": int, "end_hour": int}}],
   "exclude_times": [{{"weekday": int(1-7), "start_hour": int, "end_hour": int}}],
-  "lang": "中文" or "英文",
-  "kind": int(1=必修, 2=選修, 3=通識, 4=體育),
+  "lang": 授課語言,只能填下列其中一個,不要自創:
+        中文 英文 日文 德文 韓文 土耳其文 阿拉伯文
+        西班牙文 法文 俄文 泰文 越南文 印尼文 其他
+      (外語學院與日研、亞際等系所會用該語言開專業課,例如「國際關係理論」是日文授課、
+       「韓國地理」是韓文授課 —— 不是只有語言課才會有中文以外的值)
+  "kind": int(1=必修, 2=選修, 3=通識, 4=體育;不確定就整個不要填),
   "point_min": float,
   "point_max": float,
   "unit": str(開課單位關鍵字)
@@ -188,6 +204,9 @@ def _pg_json_path(user_input: str) -> str:
 - "不要星期三下午,選修" → {{"exclude_times": [{{"weekday": 3, "start_hour": 13, "end_hour": 18}}], "kind": 2}}
 
 用戶限制：{user_input}
+
+使用者沒提到的欄位一律不要填,連空值也不要 —— 只寫真正被要求的那幾個。
+(例:「3學分以上」只給 point_min,不要自己補 point_max。)
 
 只輸出 JSON，不要任何其他文字。
 """
