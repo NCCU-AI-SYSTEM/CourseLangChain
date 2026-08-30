@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import re
 import uuid
 
 import fire
@@ -74,6 +76,35 @@ def _check_tool_status_keys() -> None:
         )
 
 
+# 模型把工具呼叫寫成文字時的樣子:一個只有 name/arguments 的 JSON 物件。
+# 實測 qwen2:7b 有時完全不使用 tool calling 機制,直接把
+# {"name": "my_schedule_tool", "arguments": {...}} 當成**最終答案**吐出來 ——
+# 那則訊息沒有 tool_calls 可判斷,只能看內容本身。
+#
+# 刻意只認這個特定形狀(頂層 key 不超出 name/arguments/parameters),
+# 而不是「看起來像 JSON 就擋」—— 否則使用者真的要求 JSON 輸出時會被誤殺。
+_FENCE_HEAD = re.compile(r"^\s*(?:```(?:json)?\s*)+")
+_FENCE_TAIL = re.compile(r"(?:\s*```)+\s*$")
+_TOOL_CALL_LEAK_MSG = (
+    "抱歉,這次沒能整理出結果。請換個問法,或把需求說得更具體一點再試一次。"
+)
+
+
+def _is_tool_call_text(content: str) -> bool:
+    text = _FENCE_TAIL.sub("", _FENCE_HEAD.sub("", content)).strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return False
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return (
+        isinstance(obj, dict)
+        and "name" in obj
+        and set(obj) <= {"name", "arguments", "parameters"}
+    )
+
+
 def _tool_output_text(event: dict) -> str:
     """取 on_tool_end 事件裡的工具回傳文字。
 
@@ -132,7 +163,8 @@ class CourseLangGraph:
         """逐段產出回覆。
 
         yield 兩種型別,呼叫端(app.py)要分開處理:
-        - `str`:LLM 吐出的文字 token
+        - `str`:**最終答案**的完整文字(不是逐 token;ReAct 中間那幾則帶
+          tool_calls 的訊息刻意不送,否則模型把工具呼叫寫成文字時會顯示在畫面上)
         - `dict`:側通道事件,目前有兩種
           - `{"type": "status", "text": ...}`:工具開始執行的進度提示(不含工具名)
           - `{"type": "courses", "courses": [...]}`:候選課程,course_id 直接取自
@@ -159,11 +191,30 @@ class CourseLangGraph:
             version="v2",
         ):
             kind = event.get("event")
-            if kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk")
-                content = getattr(chunk, "content", None)
-                if content:
-                    yield content
+            if kind == "on_chat_model_end":
+                # 只送「最終答案」那一則。ReAct 迴圈裡每一次 LLM 呼叫都會產生文字,
+                # 但帶 tool_calls 的那些是過程,不該進畫面 —— 小模型常把工具呼叫
+                # 寫成 ```json {"name": ...} 這種文字,先前會原樣顯示給使用者。
+                #
+                # 代價:最終答案不再逐字串流,而是一次到位。在本機(CPU-only,單次
+                # 呼叫以分鐘計)這個取捨划算 —— 等待期間的「還活著」訊號由
+                # on_tool_start 的進度提示與前端計時器負責,不必靠中間文字。
+                msg = (event.get("data") or {}).get("output")
+                if msg is not None and not getattr(msg, "tool_calls", None):
+                    content = getattr(msg, "content", "") or ""
+                    if isinstance(content, list):  # 有些 provider 回結構化 content
+                        content = "".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in content
+                        )
+                    if content.strip():
+                        if _is_tool_call_text(content):
+                            logger.warning(
+                                "模型把工具呼叫當成最終答案輸出,已攔下不顯示給使用者"
+                            )
+                            yield _TOOL_CALL_LEAK_MSG
+                        else:
+                            yield content
             elif kind == "on_tool_start":
                 # 進度提示。ReAct 在 CPU-only 下一題要數分鐘,中間必須讓使用者
                 # 看得出還在跑;但顯示的是人話,不是工具名。

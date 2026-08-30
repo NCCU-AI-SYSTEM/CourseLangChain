@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Body, FastAPI, HTTPException
@@ -53,25 +54,67 @@ def get_agent():
     return _agent
 
 
-async def generate_streaming(question: str, session_id: str | None = None):
-    """Generator for streaming response."""
-    agent = get_agent()
+# SSE 心跳間隔(秒)。
+#
+# nginx 的 proxy_read_timeout 管的是「兩次讀取之間」最多沉默多久(本專案設 1200s),
+# 不是請求總長度。astream 只在最後才送出答案,中間那段 LLM 推論可能整整沉默二十分鐘
+# 以上 —— 連線會被 proxy 判定為死掉而切斷,使用者看到「連線中斷」。
+#
+# 以 `:` 開頭的行是 SSE 註解:EventSource 會直接忽略、不觸發 onmessage,
+# 所以前端一行都不用改,而 proxy 看得到流量。
+_HEARTBEAT_SEC = 15
 
-    full_response = ""
+# queue 的結束哨兵。用獨立物件而不是 None,因為 None 也可能是正常的 chunk。
+_STREAM_DONE = object()
+
+
+async def _pump_agent(agent, question: str, session_id: str | None, queue: asyncio.Queue):
+    """把 agent 的輸出推進 queue。
+
+    例外也一起推進去而不是在這裡處理 —— 消費端才知道該怎麼轉成 SSE 事件,
+    錯誤處理集中在一個地方比較不會漏。
+    """
     try:
         async for chunk in agent.astream(question, thread_id=session_id):
-            if not chunk:
+            await queue.put(chunk)
+    except Exception as e:  # noqa: BLE001 — 轉交消費端統一處理
+        await queue.put(e)
+    finally:
+        await queue.put(_STREAM_DONE)
+
+
+async def generate_streaming(question: str, session_id: str | None = None):
+    """Generator for streaming response（帶心跳，避免長時間沉默被 proxy 切斷）。"""
+    agent = get_agent()
+    queue: asyncio.Queue = asyncio.Queue()
+    pump = asyncio.create_task(_pump_agent(agent, question, session_id, queue))
+
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SEC)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
                 continue
-            # dict = 側通道事件(目前只有候選課程清單):原樣送出,不併進文字回覆
-            if isinstance(chunk, dict):
-                yield f"data: {json.dumps(chunk)}\n\n"
+
+            if item is _STREAM_DONE:
+                break
+            if isinstance(item, Exception):
+                # 用 data 欄位回可讀訊息、error 欄位放原文(前端兩個都會顯示)
+                msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(item).__name__})"
+                yield f"data: {json.dumps({'data': msg, 'error': str(item)})}\n\n"
                 continue
-            full_response += str(chunk)
-            yield f"data: {json.dumps({'data': str(chunk)})}\n\n"
-    except Exception as e:
-        # 用 data 欄位回可讀訊息(前端只認 data);否則畫面會顯示 undefined
-        msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(e).__name__})"
-        yield f"data: {json.dumps({'data': msg, 'error': str(e)})}\n\n"
+            if not item:
+                continue
+            # dict = 側通道事件(進度提示 / 候選課程):原樣送出,不併進文字回覆
+            if isinstance(item, dict):
+                yield f"data: {json.dumps(item)}\n\n"
+                continue
+            yield f"data: {json.dumps({'data': str(item)})}\n\n"
+    finally:
+        # 使用者中途關掉分頁時 generator 會被 close(),這裡要把 agent 那條也停掉,
+        # 否則它會繼續佔著 CPU 跑完整輪 —— 在本機那是好幾十分鐘的浪費。
+        pump.cancel()
 
     if langfuse_handler:
         get_client().flush()
