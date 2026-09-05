@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
+from langchain_core.runnables import RunnableConfig
+
 from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
 from paths import check_contract
@@ -55,6 +57,7 @@ _TOOL_STATUS = {
     "course_detail_tool": "正在讀課程大綱…",
     "schedule_tool": "正在排課…",
     "my_schedule_tool": "正在更新你的課表…",
+    "preference_order_tool": "正在查歷年志願序…",
     "user_profile_tool": "正在讀取修課紀錄…",
 }
 
@@ -124,14 +127,16 @@ class CourseLangGraph:
         self.executor = SafeAgentExecutor(brain_agent)
         logger.info("Brain Agent (ReAct) ready,三層 harness 已啟用。")
 
-    def _base_config(self, thread_id: str | None = None) -> dict:
+    def _base_config(self, thread_id: str | None = None) -> RunnableConfig:
         """組 LangGraph config。
 
         thread_id 是對話記憶的鍵:同一個 thread_id 的多輪才會共用歷史。
         沒帶時發一個一次性 id——agent 掛了 checkpointer,少了 thread_id 會直接 raise,
         用一次性 id 等同「這輪無記憶」,比讓呼叫端炸掉好。
         """
-        config: dict = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+        # 標成 RunnableConfig(TypedDict)而非普通 dict:LangChain 的 astream_events /
+        # invoke 都要求這個型別,傳普通 dict 執行期雖然可行,但型別檢查器會報錯。
+        config: RunnableConfig = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
         config["configurable"] = {"thread_id": thread_id or f"ephemeral-{uuid.uuid4()}"}
         return config
 
@@ -180,7 +185,7 @@ class CourseLangGraph:
         # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
         # 不套用(會切斷已輸出的 token)。L3 輸出驗證亦因逐 token 串流無法即時套用,
         # 改在非串流 invoke 路徑把關。
-        config = {
+        config: RunnableConfig = {
             **self._base_config(thread_id),
             "recursion_limit": self.executor.recursion_limit,
         }

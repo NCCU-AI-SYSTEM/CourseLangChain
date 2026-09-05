@@ -72,6 +72,7 @@ _TOOL_MODULES: tuple[str, ...] = (
     "tools.schedule_tool",           # 段 2:接候選 id 排課
     "tools.user_profile",            # 段 3:個人化——讀使用者成績單(可選)
     "tools.my_schedule",             # 段 3:讀寫 session 已排定課表(與前端面板同步)
+    "tools.preference_order",        # 段 3:志願序歷史(官方分發結果 + Dcard 學生回報)
 )
 
 _imported = False

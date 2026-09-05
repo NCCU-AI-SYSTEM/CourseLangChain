@@ -1,3 +1,5 @@
+import os
+
 from langchain_core.messages import SystemMessage, trim_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
@@ -6,13 +8,23 @@ from langgraph.prebuilt import create_react_agent
 
 from tools.course_detail import course_detail_tool
 from tools.my_schedule import my_schedule_tool
+from tools.preference_order import preference_order_tool
 from tools.retrieve import retrieve_tool
 from tools.schedule_tool import schedule_tool
 from tools.text_to_sql import text_to_sql_tool
 from tools.user_profile import user_profile_tool
 
 # Settings come from paths.py so there is one reader per setting.
-from paths import GOOGLE_API_KEY, MODEL, OLLAMA_HOST, USE_GOOGLE_AI
+from paths import (
+    GOOGLE_API_KEY,
+    GOOGLE_MODEL,
+    MODEL,
+    OLLAMA_HOST,
+    OLLAMA_NUM_CTX,
+    USE_GOOGLE_AI,
+)
+
+
 
 
 SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
@@ -35,7 +47,17 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
    使用者問「我現在排了什麼 / 幾學分」、要求把課加進或移出課表時用。
    加課若衝堂、或加入的是同一門課的另一個班(一張課表只能有一門),工具會自動移除舊的那幾門
    ——這是預期行為,照工具回覆的移除原因轉述即可,不要自己改寫成別的理由。
-6. user_profile_tool(record_path: str) -> str
+6. preference_order_tool(course_name: str, teacher: str, course_id: str, time: str) -> str
+   查「這門課志願序要排第幾才選得上」的歷史資料。使用者問「排第幾」「排3有機會嗎」
+   「志願序怎麼填」時呼叫。若剛才 retrieve_tool 有回該課的 course_id,一併帶入可精準比對。
+   **使用者若有講時段(如「二12」「五34」),務必帶入 time** —— 同一門課不同時段的
+   門檻可以從排 1 差到排 27,不指定時段答案會失準。
+   工具的「解讀」欄已經把數字翻成白話結論(例如「好選,排到第 27 志願都還上得了」),
+   **直接引用那句結論,不要自己從數字重新推論** —— 這個數字的語意是反直覺的:
+   額滿且數字大代表好選,額滿且數字小才是搶手。
+   回傳分「官方分發結果」與「學生回報」兩段 —— **兩段要分開轉述,不可平均或合併成單一結論**;
+   官方只涵蓋通識與體育,其餘課程僅有學生自述樣本,樣本少時要照實說明。
+7. user_profile_tool(record_path: str) -> str
    讀使用者自帶的成績單,回「去識別化」的修課狀況(已修課、本學期已選、畢業缺口)。這是可選功能。
    當使用者要「個人化排課」、提到自身修課狀況、或要避免重複推薦已修過的課時呼叫。
    若回傳「未提供成績單」之類訊息,就當作沒有這項資訊、照常排課,不要追問或要求使用者提供。
@@ -48,6 +70,7 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 
 ## B. 課表查詢(列多門課)
 條件:使用者要找符合條件的課程清單(如「給我關於 AI 的課」「不要星期三的機器學習」)。
+     **例外**:句子裡有「排幾/排第幾/志願序/選得上/難不難選」時不是查課,走意圖 D2。
 動作:
 - 若有時間限制 → 先 text_to_sql_tool,再 retrieve_tool(keyword, sql_filter=...)
 - 若 retrieve_tool 回傳「ERROR: 時間過濾條件無效」→ 重新執行 text_to_sql_tool 一次,再用修正後的 sql_filter 重試 retrieve_tool
@@ -65,6 +88,22 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 - 否則只傳 course_name,呼叫 course_detail_tool(course_name)
 - 若工具回傳「找到多筆」候選,把候選清單原樣呈現給使用者並請其澄清,不要自己選
 輸出格式:直接把工具回傳的 Markdown 區塊化內容呈現出來(不要自己重寫;可在開頭加一句簡短引言)。
+
+## D2. 志願序建議(這是最容易判斷錯的意圖,先看這裡)
+條件:訊息裡出現下列任一種說法,**一律走這個意圖,不要當成查課或排課**:
+  「排幾」「要排幾」「排第幾」「排幾會上」「排幾比較穩」「排 N 有機會嗎」
+  「志願序」「志願怎麼填」「填第幾」「選得上嗎」「難不難選」「好不好選」
+**消歧規則(重要)**:
+- 「排幾/排第幾/志願序」= 問**志願序**,走這裡。即使句子裡同時有課名與時段,
+  那些只是用來指定哪一門課,**不是叫你去查課**。
+- 「幫我排課表/安排課表/湊學分」才是排課(意圖 D)。
+- 使用者已經明確講出課名時,**不要再呼叫 retrieve_tool 查一次**,直接用這個工具。
+動作:呼叫 preference_order_tool(course_name, teacher, course_id, time)。
+     使用者有講時段(如「一78」「二12」)就一定要填 time,那是最有效的收斂條件。
+     若使用者是在前一輪課程清單之後追問,把該課的 course_id 一起帶入。
+輸出格式:把工具回傳的兩段原樣呈現,可在開頭加一句簡短引言。
+     **不要把官方數字與學生回報混在一起講**,也不要自己算平均或給出「保證會上」的說法。
+     官方的「最後分發志願序」只有在該場次額滿時才是門檻,工具已標示,照實轉述。
 
 ## D. 排課(幫忙排出一週課表)
 條件:使用者要系統「幫忙排課表 / 安排課表 / 湊學分」,常帶學分數、避開時段、想修的主題等
@@ -98,7 +137,7 @@ def _get_chat_llm():
     """Brain Agent 必須使用支援 tool calling 的 Chat 介面（不是 OllamaLLM）。"""
     if USE_GOOGLE_AI:
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model=GOOGLE_MODEL,
             temperature=0.3,
             google_api_key=GOOGLE_API_KEY,
         )
@@ -106,6 +145,7 @@ def _get_chat_llm():
         model=MODEL,
         base_url=OLLAMA_HOST,
         temperature=0.3,
+        num_ctx=OLLAMA_NUM_CTX,
     )
 
 
@@ -160,6 +200,7 @@ def build_brain_agent():
             schedule_tool,
             user_profile_tool,
             my_schedule_tool,
+            preference_order_tool,
         ],
         prompt=SystemMessage(content=SYSTEM_PROMPT),
         pre_model_hook=_trim_history,
