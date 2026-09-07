@@ -10,6 +10,7 @@ solver / validator / ranker / formatter 都在 tools/scheduler.py(純函數,零 
 from __future__ import annotations
 
 import sqlite3
+from collections import OrderedDict
 from warnings import deprecated
 
 from langchain_core.tools import tool
@@ -21,6 +22,7 @@ from tools.scheduler import (
     format_schedules_markdown,
     make_course,
     parse_course_slots,
+    plans_to_dicts,
     rank_schedules,
     validate_schedule,
 )
@@ -28,6 +30,38 @@ from tools.scheduler import (
 from .registry import register_tool
 
 DB_PATH = DATA_DB
+
+# ---------------------------------------------------------------------------
+# 結構化方案的暫存區 —— key 是「這次呼叫實際回傳的那串文字」
+#
+# main.py 的 astream 攔到 on_tool_end 之後,用工具回傳字串把這組方案領走,經 SSE
+# 側通道送前端畫「套用此方案」按鈕。13 碼 course_id 因此完全不經 LLM 轉述,
+# 與 retrieve_tool 的候選課卡片同一個原則(給模型讀的 Markdown 一個字都沒改)。
+#
+# 為什麼用「回傳字串」當 key,而不是 ContextVar 或單一的「上一次結果」:
+# - schedule_tool 是同步函式,LangGraph 會把它丟到 threadpool 執行;在那個執行緒裡
+#   設定的 ContextVar 不會傳回呼叫端,main.py 根本讀不到。
+# - 只存「上一次結果」的話,兩個 session 同時排課會互相蓋掉,前端會拿到別人的課表。
+# 回傳字串是這次呼叫的天然唯一識別,領走即刪,不會張冠李戴。
+_PLAN_CACHE: OrderedDict[str, list[dict]] = OrderedDict()
+# 沒有人來領的方案(例如 CLI 直接呼叫工具)不會自己消失,所以設上限淘汰最舊的。
+# 一次對話最多產生幾筆,32 筆綽綽有餘。
+_PLAN_CACHE_MAX = 32
+
+
+def _remember_plans(output: str, plans: list[dict]) -> None:
+    """把這次排課的結構化方案記下來,等 main.py 用同一串回傳文字來領。"""
+    if not plans:
+        return
+    _PLAN_CACHE[output] = plans
+    _PLAN_CACHE.move_to_end(output)
+    while len(_PLAN_CACHE) > _PLAN_CACHE_MAX:
+        _PLAN_CACHE.popitem(last=False)
+
+
+def pop_plans(output: str) -> list[dict]:
+    """依工具回傳字串領走結構化方案(領完即刪);沒有對應資料時回空清單。"""
+    return _PLAN_CACHE.pop(output, [])
 
 
 def _split_ids(course_ids: str) -> list[str]:
@@ -153,6 +187,8 @@ def schedule_tool(
         result = format_schedules_markdown(ranked)
         if missing:
             result += f"\n\n> 註:以下 id 在資料庫找不到,已略過:{', '.join(missing)}"
+        # 附註要先接上去:main.py 是拿「最終回傳字串」來領方案的,key 必須一模一樣
+        _remember_plans(result, plans_to_dicts(ranked))
         return result
     except Exception as e:  # noqa: BLE001 — tool 契約要求回字串而非 raise
         return f"ERROR: 排課時發生未預期錯誤:{e}"

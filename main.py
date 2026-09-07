@@ -15,6 +15,7 @@ from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
 from paths import check_contract
 from tools.retrieve import parse_formatted_docs, retrieve_tool
+from tools.schedule_tool import pop_plans, schedule_tool
 
 load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
@@ -55,7 +56,7 @@ _TOOL_STATUS = {
     "text_to_sql_tool": "正在解析時間條件…",
     retrieve_tool.name: "正在查詢課程…",   # 不寫死:工具改名時 import 會先炸,不會靜默失效
     "course_detail_tool": "正在讀課程大綱…",
-    "schedule_tool": "正在排課…",
+    schedule_tool.name: "正在排課…",   # 同上:側通道也靠這個名字,不能靜默失效
     "my_schedule_tool": "正在更新你的課表…",
     "preference_order_tool": "正在查歷年志願序…",
     "user_profile_tool": "正在讀取修課紀錄…",
@@ -170,10 +171,12 @@ class CourseLangGraph:
         yield 兩種型別,呼叫端(app.py)要分開處理:
         - `str`:**最終答案**的完整文字(不是逐 token;ReAct 中間那幾則帶
           tool_calls 的訊息刻意不送,否則模型把工具呼叫寫成文字時會顯示在畫面上)
-        - `dict`:側通道事件,目前有兩種
+        - `dict`:側通道事件,目前有三種
           - `{"type": "status", "text": ...}`:工具開始執行的進度提示(不含工具名)
           - `{"type": "courses", "courses": [...]}`:候選課程,course_id 直接取自
             工具輸出、不經 LLM 轉述
+          - `{"type": "plans", "plans": [...]}`:排課方案(含每門課的 course_id),
+            前端據此提供「一鍵套用整份方案」;方案編號與回覆文字裡的「方案 N」一致
         """
         # L1:輸入清理(串流路徑同樣先擋)
         text, is_safe = sanitize_input(user_input)
@@ -238,6 +241,14 @@ class CourseLangGraph:
                 if fresh:
                     seen_ids.update(c["course_id"] for c in fresh)
                     yield {"type": "courses", "courses": fresh}
+            elif kind == "on_tool_end" and event.get("name") == schedule_tool.name:
+                # 側通道:排課方案的結構化版本(含 course_id),前端據此畫「套用此方案」。
+                # 給模型讀的 Markdown 刻意沒有 id,所以這裡不是解析工具輸出,而是拿
+                # 那串輸出當鑰匙,把工具排課當下就備好的結構化方案領出來
+                # (見 tools/schedule_tool.py 的 _PLAN_CACHE)。
+                plans = pop_plans(_tool_output_text(event))
+                if plans:
+                    yield {"type": "plans", "plans": plans}
         logger.info("Brain Agent execution completed")
 
 

@@ -239,6 +239,68 @@ async def delete_from_schedule(session_id: str | None = None, course_id: str | N
     return {**_schedule_payload(session_id), "removed": removed}
 
 
+@app.post("/api/schedule/apply")
+async def apply_schedule_plan(payload: dict = Body(...)):
+    """一鍵套用一整份排課方案(聊天裡推薦的「方案 N」)。
+
+    course_ids 來自 SSE 側通道的 `plans` 事件 —— 是 schedule_tool 排課當下的原始 id,
+    完全沒經過 LLM 轉述,所以不會有抄錯 13 碼的問題。
+
+    方案內部已由 scheduler 保證兩兩無衝堂、同名課只取一門,因此逐門加入時只可能撞到
+    「課表裡原有的課」,那些照既有規則(同名課 / 衝堂)自動讓位 —— 與面板手動加課
+    同一套規則,不另外發明。
+
+    - `replace=true`:先清空再加,語意是「整張課表換成這個方案」
+    - `replace=false`(預設):疊加在現有課表上
+
+    單門課加失敗(例如撞到 MAX_COURSES 上限)不中斷整批,收進 `failed` 一起回報 ——
+    半途拋 400 會留下一張加到一半的課表,使用者看不出停在哪裡。
+    """
+    session_id = _require_session(payload.get("session_id"))
+    raw_ids = payload.get("course_ids")
+    if not isinstance(raw_ids, list):
+        raise HTTPException(status_code=400, detail="course_ids 必須是陣列")
+
+    term = payload.get("term")
+    course_ids: list[str] = []
+    for raw in raw_ids:
+        cid = session_schedule.normalize_course_id(raw, term)
+        if cid and cid not in course_ids:
+            course_ids.append(cid)
+    if not course_ids:
+        raise HTTPException(status_code=400, detail="缺少 course_ids")
+
+    if payload.get("replace"):
+        session_schedule.clear_schedule(session_id)
+
+    applied: list[dict] = []
+    failed: list[dict] = []
+    removed: dict[str, dict] = {}
+    removed_reasons: dict[str, str] = {}
+    for cid in course_ids:
+        result = session_schedule.add_course(session_id, cid)
+        if not result["ok"]:
+            failed.append({"course_id": cid, "error": result["error"]})
+            continue
+        applied.append(session_schedule.to_dicts([result["added"]])[0])
+        for c in session_schedule.to_dicts(result["removed"]):
+            removed[c["course_id"]] = c
+        removed_reasons.update(result.get("removed_reasons", {}))
+
+    # 方案內的課彼此不衝堂,所以理論上不會互相踢掉;仍把「最後仍在課表裡」的課從
+    # 移除清單剔除,免得提示出現「已加入 X,已移除 X」這種自相矛盾的句子。
+    applied_ids = {c["course_id"] for c in applied}
+    return {
+        **_schedule_payload(session_id),
+        "applied": applied,
+        "failed": failed,
+        "removed": [c for cid, c in removed.items() if cid not in applied_ids],
+        "removed_reasons": {
+            k: v for k, v in removed_reasons.items() if k not in applied_ids
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # 成績單 API —— 使用者自校務系統下載後上傳,用於個人化排課
 #
