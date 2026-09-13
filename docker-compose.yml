@@ -48,6 +48,9 @@ services:
       RRF_CANDIDATES: ${RRF_CANDIDATES:-50}
       AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-600}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+      # 外部 MCP 工具(校內網站檢索)。容器裡的 localhost 是容器自己,所以吃 DOCKER_ 開頭那個;
+      # 留空 = 不啟用。
+      CAMPUS_WEB_MCP_URL: ${DOCKER_CAMPUS_WEB_MCP_URL:-}
     volumes:
       - ./contract.yaml:/course-langchain/contract.yaml:ro
       # The query encoder (~400MB) is downloaded on the first query, not baked

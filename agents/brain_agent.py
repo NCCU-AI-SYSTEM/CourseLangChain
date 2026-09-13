@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from tools.course_detail import course_detail_tool
+from tools.mcp_tools import campus_web_tools
 from tools.my_schedule import my_schedule_tool
 from tools.preference_order import preference_order_tool
 from tools.retrieve import retrieve_tool
@@ -132,6 +133,38 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 - 若工具回傳「找不到」之類訊息 → 直接回覆「抱歉,沒有找到符合條件的課程」。
 """
 
+# 外部 MCP 工具(校內網站檢索)的說明與意圖 E。**只在工具真的載入時才接到 SYSTEM_PROMPT 後面**
+# —— prompt 提到不存在的工具,模型會照樣去「呼叫」它,或乾脆捏造它的回傳。
+# 工具名與說明直接取自 MCP server 回報的內容,對方改名時這裡不必跟著改。
+_CAMPUS_WEB_PROMPT = """
+# 外部工具:校內網站資料
+{tool_lines}
+這類工具查的是學校各單位網站(教務處、註冊組等)的公告與規章,**不是課程資料庫**。
+
+## E. 校內行政與規章問答
+條件:問的是學校行政、規章、單位資訊、公告、申請流程等**需要查證的校務事實**
+     (如「註冊組在哪」「休學要怎麼辦」「加退選什麼時候」)。
+消歧規則:
+- 要找「有哪些課 / 某門課的內容 / 排課 / 志願序」→ 走 B/C/D/D2,不要用上面的校內網站工具。
+- 意圖 A 裡「選課系統什麼時候開」這類**涉及日期、規定**的問題,改走 E 查證,不要憑印象回答;
+  寒暄與閒聊仍走 A。
+動作:呼叫校內網站工具一次,把使用者問題的重點當作 query。
+輸出格式:只根據工具回傳的內容回答,條列重點,最後一行附「資料來源」網址(照抄工具給的,不可自己編)。
+     工具回傳「找不到」或 ERROR → 直接說目前查不到這項資訊,建議到相關單位網站確認,不要自己補答案
+     (這條優先於通用規則裡「沒有找到符合條件的課程」那句)。
+"""
+
+
+def _campus_web_prompt(tools: list) -> str:
+    """外部工具的 prompt 區塊;沒有載入任何外部工具時回空字串。"""
+    if not tools:
+        return ""
+    tool_lines = "\n".join(
+        f"- {t.name}({', '.join(t.args)})\n  {' '.join((t.description or '').split())}"
+        for t in tools
+    )
+    return _CAMPUS_WEB_PROMPT.format(tool_lines=tool_lines)
+
 
 def _get_chat_llm():
     """Brain Agent 必須使用支援 tool calling 的 Chat 介面（不是 OllamaLLM）。"""
@@ -191,18 +224,22 @@ def build_brain_agent():
     依賴這個)。刻意用 in-memory 而非 SqliteSaver——歷史裡含 user_profile_tool 解析出的
     修課狀況,落地存檔會牴觸「僅本次使用、不儲存」的隱私承諾。程序重啟即清空。
     """
+    local_tools = [
+        text_to_sql_tool,
+        retrieve_tool,
+        course_detail_tool,
+        schedule_tool,
+        user_profile_tool,
+        my_schedule_tool,
+        preference_order_tool,
+    ]
+    # 外部 MCP 工具(校內網站檢索)。沒設 CAMPUS_WEB_MCP_URL 或連不上時是空清單,
+    # agent 的工具與 prompt 都與加入 MCP 之前完全相同。
+    remote_tools = campus_web_tools(reserved_names={t.name for t in local_tools})
     return create_react_agent(
         model=_get_chat_llm(),
-        tools=[
-            text_to_sql_tool,
-            retrieve_tool,
-            course_detail_tool,
-            schedule_tool,
-            user_profile_tool,
-            my_schedule_tool,
-            preference_order_tool,
-        ],
-        prompt=SystemMessage(content=SYSTEM_PROMPT),
+        tools=[*local_tools, *remote_tools],
+        prompt=SystemMessage(content=SYSTEM_PROMPT + _campus_web_prompt(remote_tools)),
         pre_model_hook=_trim_history,
         checkpointer=InMemorySaver(),
     )
