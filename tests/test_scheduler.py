@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 
 from tools.scheduler import (
@@ -109,8 +110,30 @@ def test_exclude_undefined_and_dedup() -> None:
     check(any("未定" in x for x in v_flex), "validator 抓到未定時段")
 
 
+def _has_course_table(path: str) -> bool:
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='COURSE'"
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except sqlite3.Error:
+        return False
+
+
 def test_on_real_db() -> None:
     print("[real data.db smoke test]")
+    # data.db 是 course-data-prep 的成品(且屬於已棄用的 SQLite 路徑),不在這個 repo 裡。
+    # 沒有就跳過 —— 純執行期的 repo 不該因為缺資料成品而測試失敗。
+    #
+    # 注意不能只看檔案在不在:sqlite3.connect() 對不存在的路徑會「建一個空檔」,
+    # 跑過一次失敗的測試之後就會留下 0 byte 的 data.db,下次就變成 no such table。
+    if not _has_course_table("data.db"):
+        print("    (略過:沒有可用的 data.db —— 由 course-data-prep 產生,且 SQLite 路徑已棄用)")
+        return
     try:
         conn = sqlite3.connect("data.db")
         cur = conn.cursor()

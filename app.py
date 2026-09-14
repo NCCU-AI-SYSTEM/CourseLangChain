@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 import json
@@ -7,7 +9,9 @@ from dotenv import load_dotenv
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
-load_dotenv(override=True)
+from paths import check_contract
+
+load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -15,7 +19,14 @@ os.environ.setdefault(
 os.environ.setdefault("LANGFUSE_PUBLIC_KEY", os.getenv("LANGFUSE_PUBLIC_KEY") or "")
 os.environ.setdefault("LANGFUSE_SECRET_KEY", os.getenv("LANGFUSE_SECRET_KEY") or "")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """開機就驗資料契約 —— 讓它在啟動時大聲失敗,而不是等到第一個查詢才炸。"""
+    check_contract()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
 secret_key = os.getenv("LANGFUSE_SECRET_KEY")

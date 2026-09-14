@@ -1,25 +1,193 @@
-"""集中管理資料檔的絕對路徑,**不依賴程序的工作目錄(cwd)**。
+"""Settings and data paths. The single place this repo reads configuration.
 
-問題背景:`data.db` / `vectorstore.pkl` 用相對路徑時,若 server / IDE 從非
-`CourseLangChain/` 的目錄啟動,SQLite 會自動建一個空 db(→ `no such table: COURSE`)、
-pickle 則 FileNotFoundError。這裡以「本檔所在目錄」為專案根錨定,徹底避開 cwd 問題。
+Every setting has exactly one source:
+
+  contract.yaml  properties of the DATA (model, dimension, semester, schema
+                 version). Committed, identical in course-data-prep, and NOT
+                 overridable by env — the whole point is that both sides agree.
+  environment    properties of THIS MACHINE (database location, LLM host,
+                 credentials, hardware) plus retrieval tuning knobs.
+
+Import from here rather than calling os.getenv again elsewhere; two readers of one
+setting can drift apart in their defaults.
+
+Paths are anchored to this file, not the cwd: relative paths break when the server
+or IDE starts from another directory (SQLite quietly creates an empty db).
 """
+from __future__ import annotations
+
+import json
 import os
+from warnings import deprecated
+
+import yaml
+from dotenv import load_dotenv
+
+# override=True: on the host .env wins. Containers get their values from compose.
+load_dotenv(override=True)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# ── Data contract (contract.yaml — no env overrides) ─────────────────────────
+
+CONTRACT_PATH = os.path.join(PROJECT_ROOT, "contract.yaml")
+
+with open(CONTRACT_PATH, encoding="utf-8") as _f:
+    CONTRACT: dict = yaml.safe_load(_f)
+
+SCHEMA_VERSION: int = CONTRACT["schema_version"]
+EMBED_MODEL: str = CONTRACT["embed_model"]
+EMBED_DIM: int = int(CONTRACT["embed_dim"])
+SQLITE_EMBED_MODEL: str = CONTRACT["sqlite_embed_model"]
+
+COURSE_YEAR: str = str(CONTRACT["course_year"])
+COURSE_SEMESTER: str = str(CONTRACT["course_semester"])
+
+# ── LLM (env) ────────────────────────────────────────────────────────────────
+
+MODEL = os.getenv("MODEL")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+USE_GOOGLE_AI = os.getenv("USE_GOOGLE_AI", "false").lower() == "true"
+
+# ── Data files ───────────────────────────────────────────────────────────────
+
 DATA_DB = os.path.join(PROJECT_ROOT, "data.db")
-VECTORSTORE_PKL = os.path.join(PROJECT_ROOT, "vectorstore.pkl")
 
-# 當前學期 —— 必須與 build.py 建索引時用的 y/s 一致(docker 預設 114 學年第 2 學期)。
-# data.db 含跨學年共 10 萬+ 筆,但 vectorstore.pkl 只建單一學期;query_courses 的
-# sql_filter 路徑會跳過 pickle 直接查 COURSE,故須用這組常數把查詢鎖回同一學期,
-# 否則會撈到別的學年(course_id 開頭學期碼對不上,排課也會錯)。
-COURSE_YEAR = os.getenv("COURSE_YEAR", "114")
-COURSE_SEMESTER = os.getenv("COURSE_SEMESTER", "2")
+FAISS_INDEX_DIR = os.path.join(PROJECT_ROOT, "faiss_index")
+COURSES_JSONL = os.path.join(PROJECT_ROOT, "courses.jsonl")
+FAISS_META_JSON = os.path.join(FAISS_INDEX_DIR, "meta.json")
 
-# 使用者自校務系統匯出的成績單 JSON(可選、含個資)。預設放專案根,
-# 由 .gitignore 擋下不進 git;沒這個檔時個人化功能自動略過。
 USER_RECORD_JSON = os.getenv(
     "USER_RECORD_JSON", os.path.join(PROJECT_ROOT, "user_record.json")
 )
+
+# ── Backend selection ────────────────────────────────────────────────────────
+
+USE_SQLITE = os.getenv("USE_SQLITE", "false").lower() == "true"
+
+SQLITE_DEPRECATION_MSG = (
+    "SQLite + FAISS 路徑已棄用,將於後續版本移除。"
+    "PostgreSQL 路徑已具備同等的 BM25 + 向量 RRF 混合檢索,且只需要一份 dump。"
+    "請改用 USE_SQLITE=false(docker compose up -d postgres)。"
+)
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/academic",
+)
+
+# ── Retrieval tuning ─────────────────────────────────────────────────────────
+
+RRF_K = int(os.getenv("RRF_K", "60"))
+RRF_CANDIDATES = int(os.getenv("RRF_CANDIDATES", "50"))
+
+
+# ── Contract check ───────────────────────────────────────────────────────────
+
+
+class ContractMismatch(RuntimeError):
+    """Artifacts disagree with contract.yaml — refuse to start rather than rank wrongly."""
+
+
+_PREP_HINT = (
+    "資料由 course-data-prep repo 產生。請確認兩邊的 contract.yaml 一致,"
+    "重跑一次準備流程後重新產生資料成品。"
+)
+
+
+def _compare(actual: dict, expected: dict, source: str) -> None:
+    diffs = [
+        f"  - {key}: 資料成品是 {actual.get(key)!r},contract.yaml 是 {value!r}"
+        for key, value in expected.items()
+        if str(actual.get(key)) != str(value)
+    ]
+    if diffs:
+        raise ContractMismatch(
+            f"資料成品({source})與 contract.yaml 不一致:\n"
+            + "\n".join(diffs)
+            + f"\n{_PREP_HINT}"
+        )
+
+
+@deprecated(SQLITE_DEPRECATION_MSG)
+def _check_sqlite_contract() -> None:
+    if not os.path.exists(FAISS_META_JSON):
+        raise ContractMismatch(
+            f"找不到 {FAISS_META_JSON}(USE_SQLITE=true 需要 faiss_index/)。\n{_PREP_HINT}"
+        )
+    with open(FAISS_META_JSON, encoding="utf-8") as f:
+        meta = json.load(f)
+    _compare(
+        meta,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "sqlite_embed_model": SQLITE_EMBED_MODEL,
+            "course_year": COURSE_YEAR,
+            "course_semester": COURSE_SEMESTER,
+        },
+        source=FAISS_META_JSON,
+    )
+
+
+def _check_pg_contract() -> None:
+    import psycopg2
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+    except psycopg2.Error as e:
+        raise ContractMismatch(
+            f"連不上 PostgreSQL({e})。請先 `docker compose up -d postgres`,"
+            f"或改用 USE_SQLITE=true。"
+        ) from e
+
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT to_regclass('public.schema_meta')")
+        if cur.fetchone()[0] is None:
+            raise ContractMismatch(
+                "資料庫沒有 schema_meta 表 —— 這個 DB 還沒被準備過(db/init/ 是空的?)。\n"
+                "把 course-data-prep 產出的 .sql.gz 放進 ./db/init/,然後\n"
+                "`docker compose down -v && docker compose up -d postgres`。\n"
+                "(一定要 -v:還原只在 volume 全新時發生,否則新檔案不會生效也不會報錯。)\n"
+                f"{_PREP_HINT}"
+            )
+        cur.execute("SELECT key, value FROM public.schema_meta")
+        meta = dict(cur.fetchall())
+        cur.close()
+    finally:
+        conn.close()
+
+    _compare(
+        meta,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "embed_model": EMBED_MODEL,
+            "embed_dim": EMBED_DIM,
+            "course_year": COURSE_YEAR,
+            "course_semester": COURSE_SEMESTER,
+        },
+        source="PostgreSQL schema_meta",
+    )
+
+
+_checked = False
+
+
+def check_contract(force: bool = False) -> None:
+    """Check artifacts against contract.yaml. Runs once per process.
+
+    Guards the silent failure: if the prep side re-embeds with a different model and
+    this side doesn't follow, queries don't error — they just return unrelated courses.
+
+    Memoised because app.py constructs CourseLangGraph per request and the PostgreSQL
+    check opens a connection.
+    """
+    global _checked
+    if _checked and not force:
+        return
+    if USE_SQLITE:
+        _check_sqlite_contract()
+    else:
+        _check_pg_contract()
+    _checked = True

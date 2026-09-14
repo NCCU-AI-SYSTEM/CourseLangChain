@@ -230,5 +230,11 @@ readme.md
 changelog.md
 
 ### project files ###
+# 資料成品不進 image:成品有 70MB+,而且 app 是連 postgres 拿資料,不是讀檔。
+# db/ 是資料庫的 initdb 目錄,只有 postgres 容器會用到。
+db/
 data.db
 vectorstore.pkl
+faiss_index/
+courses.jsonl
+

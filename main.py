@@ -8,8 +8,9 @@ from langfuse.langchain import CallbackHandler
 
 from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
+from paths import check_contract
 
-load_dotenv(override=True)
+load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
 # L1 擋下不安全輸入時回給使用者的訊息
 _REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方式重新提問。"
@@ -40,9 +41,22 @@ formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(messag
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+# handler 掛在 root 上,不是只掛給 CourseLangGraph —— tools/ 與 harness/ 用的是
+# getLogger(__name__),只設定 CourseLangGraph 的話它們的 INFO 全部無聲消失。
+# text_to_sql 記錄「送出什麼、收回什麼」正是要靠這個才看得到。
+root = logging.getLogger()
+if not root.handlers:
+    root.addHandler(ch)
+root.setLevel(logging.INFO)
+
+# httpx 每發一個請求就 INFO 一行,開了 root 之後會把真正的訊息淹掉。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 class CourseLangGraph:
     def __init__(self, cli: bool = False) -> None:
+        # 資料成品與 contract.yaml 必須對得上,否則寧可不啟動(memo,每個 process 一次)
+        check_contract()
         self.brain_agent = brain_agent
         # L2:把 ReAct graph 包進安全外殼(step / timeout / exception 防護)
         self.executor = SafeAgentExecutor(brain_agent)

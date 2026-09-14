@@ -1,32 +1,61 @@
 services:
-  courselanggraph:
+  postgres:
+    image: paradedb/paradedb:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: academic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d academic"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    volumes:
+      - pgdata:/var/lib/postgresql/18/docker
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  app:
+    profiles: [app]
     build:
-      args:
-        PROJECT_PATH: /course-langchain
       context: .
       dockerfile: Dockerfile
-    environment:
-      - OLLAMA_HOST=${OLLAMA_HOST}
-      - MODEL=${MODEL}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
-      - USE_GOOGLE_AI=${USE_GOOGLE_AI}
+      target: prod
+      args:
+        PROJECT_PATH: /course-langchain
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
-    # data.db / vectorstore.pkl 被 .dockerignore 排除(太大,不烤進 image),
-    # 改在 runtime 掛載進容器;否則容器內無此檔 → no such table: COURSE / 找不到向量庫
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
+      USE_SQLITE: "false"
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://host.docker.internal:11434}
+      LANGFUSE_BASE_URL: ${DOCKER_LANGFUSE_BASE_URL:-http://host.docker.internal:3000}
+      MODEL: ${MODEL:-llama3.1:8b}
+      USE_GOOGLE_AI: ${USE_GOOGLE_AI:-false}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
+      RRF_K: ${RRF_K:-60}
+      RRF_CANDIDATES: ${RRF_CANDIDATES:-50}
+      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-600}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
     volumes:
-      - ./data.db:/course-langchain/data.db
-      - ./vectorstore.pkl:/course-langchain/vectorstore.pkl
+      - ./contract.yaml:/course-langchain/contract.yaml:ro
+      # The query encoder (~400MB) is downloaded on the first query, not baked
+      # into the image. Without this the download restarts from zero on every
+      # container recreate — and a stalled fetch leaves the first query hanging.
+      - hfcache:/home/user/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    command: ["bash", "-c", "python app.py"]
+    command: ["python", "app.py"]
+
+volumes:
+  pgdata:
+  hfcache:
