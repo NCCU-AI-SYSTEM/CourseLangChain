@@ -14,6 +14,8 @@ from paths import (
     USE_SQLITE,
 )
 
+from .registry import register_tool
+
 _FIELD_TRUNCATE = 800
 
 
@@ -203,3 +205,4 @@ def _fetch_pg(select_cols: str, course_name: str, course_id: Optional[str]) -> s
     if len(rows) == 1:
         return _format_one(rows[0])
     return _format_candidates(rows)
+register_tool(course_detail_tool)

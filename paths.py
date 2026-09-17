@@ -50,6 +50,18 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 USE_GOOGLE_AI = os.getenv("USE_GOOGLE_AI", "false").lower() == "true"
 
+# Gemini 型號。**不要寫死在程式裡** —— Google 會讓舊型號對「新申請的金鑰」停用,
+# 實測 gemini-2.5-flash 回 404「no longer available to new users」,而同一把金鑰
+# 仍能列出 40 個可用模型。寫死的話,換一把金鑰就壞。
+GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-3.6-flash")
+
+# Ollama 的 context window。**不設就是預設 4096,而那會讓整個 agent 悄悄失效。**
+# 2026-09-03 實測:SYSTEM_PROMPT + 工具 schema + 一次工具回傳就達 5,588 token,
+# ollama 的處置是截斷而非報錯(`truncating input prompt limit=4096 keep=4`),
+# `keep=4` 只留開頭 4 個 token → SYSTEM_PROMPT 整段被切掉 → 模型不知道自己該做什麼,
+# 重複呼叫工具直到撞步數上限。先前誤判為「小模型 tool calling 能力不足」。
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+
 # ── Data files ───────────────────────────────────────────────────────────────
 
 DATA_DB = os.path.join(PROJECT_ROOT, "data.db")

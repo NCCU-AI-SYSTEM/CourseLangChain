@@ -8,6 +8,9 @@ solver(DFS+剪枝)、衝堂 validator。段 2 才把這些包成 `schedule_tool`
 - `has_conflict(a, b)`            — 兩門課是否時間衝堂
 - `validate_schedule(...)`        — 回傳違規清單(空 = 合法),排課流程中**不可跳過**
 - `find_schedules(...)`           — DFS 列舉所有合法課表組合
+- `format_schedules_markdown(...)` / `plans_to_dicts(...)`
+                                  — 同一份方案的兩種表示:前者給模型讀(無 course_id),
+                                    後者給前端用(有 course_id),兩者成對、必須同步修改
 
 衝堂模型刻意用「slot 集合交集」而非時鐘時間:同一 (星期, 節次) 被兩門課佔用即衝堂,
 不需要換算成幾點幾分,既正確又不會被 `getSessionArray` 的時鐘換算邏輯影響。
@@ -247,3 +250,36 @@ def _distinct_weekdays_chars(schedule: list[CourseSlot]) -> set[str]:
     for c in schedule:
         days |= c.weekdays
     return days
+
+
+def plans_to_dicts(schedules: list[list[CourseSlot]]) -> list[dict]:
+    """把排課方案轉成結構化清單(純函數),供 SSE 側通道送前端畫「套用此方案」按鈕。
+
+    與 `format_schedules_markdown` **成對**:同一份 `schedules`,一個轉成給模型讀的
+    Markdown(刻意不含 13 碼 course_id),一個轉成給前端用的結構化資料(含 course_id)。
+    course_id 因此完全不經 LLM 轉述 —— 與 `retrieve_tool` 的候選課卡片同一個原則。
+
+    兩者的**方案編號、排序、學分與上課日字串必須一致**:使用者讀到的「方案 2」與
+    按下按鈕實際套用的必須是同一組,所以 enumerate 起點、`sorted(key=course_id)`、
+    `round(...,1)` 都照抄上面那個 formatter,兩個函式相鄰擺放,改動時會一起看到。
+    """
+    plans: list[dict] = []
+    for idx, sched in enumerate(schedules, 1):
+        plans.append(
+            {
+                "index": idx,
+                "total_credits": round(sum(c.credits for c in sched), 1),
+                "days": "".join(sorted(_distinct_weekdays_chars(sched))),
+                "courses": [
+                    {
+                        "course_id": c.course_id,
+                        "name": c.name,
+                        "time": c.time_str,
+                        "teacher": c.teacher,
+                        "credits": c.credits,
+                    }
+                    for c in sorted(sched, key=lambda x: x.course_id)
+                ],
+            }
+        )
+    return plans
