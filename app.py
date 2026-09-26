@@ -7,7 +7,8 @@ import json
 import os
 from dotenv import load_dotenv
 
-from tools import session_profile, session_schedule
+from tools import session_moodle, session_profile, session_schedule
+from tools.mcp_tools import moodle_enabled, verify_moodle_login
 
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
@@ -354,6 +355,51 @@ async def delete_profile(session_id: str | None = None):
     session_id = _require_session(session_id)
     existed = session_profile.clear_profile(session_id)
     return {"has_profile": False, "removed": existed}
+
+
+# ── Moodle:每位使用者自己登入,帳密只存在記憶體(見 tools/session_moodle.py) ──────
+
+
+@app.get("/api/moodle")
+async def get_moodle(session_id: str | None = None):
+    """這個 session 是否已連結 Moodle。不含密碼。"""
+    session_id = _require_session(session_id)
+    return {"enabled": moodle_enabled(), **session_moodle.summary(session_id)}
+
+
+@app.post("/api/moodle")
+async def login_moodle(payload: dict = Body(...)):
+    """用 NCCU 學號密碼連結 Moodle。**先實際登入一次,成功才存**,錯的帳密不會留下來。"""
+    session_id = _require_session(payload.get("session_id"))
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="請輸入學號與密碼")
+    if len(username) > 32 or len(password) > 128:
+        raise HTTPException(status_code=400, detail="學號或密碼長度不正確")
+    if session_moodle.too_many_failures(session_id):
+        raise HTTPException(
+            status_code=429,
+            detail="登入失敗次數太多。為了避免學校鎖定你的帳號,請 15 分鐘後再試。",
+        )
+
+    # 驗證要走一次 NCCU SSO(數秒),丟到 thread 才不會卡住其他請求
+    status, message = await asyncio.to_thread(verify_moodle_login, username, password)
+    if status != 200:
+        if status == 401:
+            session_moodle.record_failure(session_id)
+        raise HTTPException(status_code=status, detail=message)
+
+    session_moodle.set_credentials(session_id, username, password)
+    return {"enabled": True, **session_moodle.summary(session_id), "message": message}
+
+
+@app.delete("/api/moodle")
+async def logout_moodle(session_id: str | None = None):
+    """登出:清掉這個 session 的 Moodle 帳密。"""
+    session_id = _require_session(session_id)
+    existed = session_moodle.clear_credentials(session_id)
+    return {"enabled": moodle_enabled(), "connected": False, "removed": existed}
 
 
 if __name__ == "__main__":
