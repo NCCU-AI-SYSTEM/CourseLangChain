@@ -1,15 +1,14 @@
-name: course-langchain-dev
+name: courselanggraph-dev
 services:
-  courselangchain:
+  courselanggraph:
     build:
       args:
         PROJECT_PATH: /course-langchain
       target: dev
       context: .
       dockerfile: Dockerfile
-    environment:
-      - OLLAMA_HOST=${OLLAMA_HOST}
-      - MODEL=${MODEL}
+    env_file:
+      - .env
     volumes:
       - .:/course-langchain
     extra_hosts:

@@ -1,6 +1,8 @@
 *.db
 *.csv
 *.pkl
+*.bak
+vectorstore.pkl*
 .env
 
 __pycache__/
@@ -9,3 +11,18 @@ vectordb*/
 model
 uploads
 .DS_Store
+
+trace*.json
+
+# 使用者自帶的成績單(含個資,絕不進 git);.example 範本可進
+user_record.json
+user_record*.json
+!user_record.example.json
+
+# 由 course-data-prep 產生的資料成品(太大且會隨學期更新,不進 git)。
+# db/init/ 會被掛成容器的 initdb 目錄,首次啟動時自動還原 *.sql.gz。
+db/init/*
+!db/init/.gitkeep
+# 【已棄用】USE_SQLITE=true 時的檢索索引
+faiss_index/
+courses.jsonl

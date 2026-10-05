@@ -1,75 +1,289 @@
+import json
 import logging
-import pickle
-import fire
 import os
+import re
+import uuid
+
+import fire
 from dotenv import load_dotenv
+from langfuse import get_client
+from langfuse.langchain import CallbackHandler
 
-from langchain_ollama import OllamaLLM
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from langchain_classic.retrievers.ensemble import EnsembleRetriever
+from langchain_core.runnables import RunnableConfig
 
-from utils.prompt import get_prompt
+from agents.brain_agent import brain_agent
+from harness import SafeAgentExecutor, sanitize_input, validate_output
+from paths import check_contract
+from tools.mcp_tools import tool_status as mcp_tool_status
+from tools.retrieve import parse_formatted_docs, retrieve_tool
+from tools.schedule_tool import pop_plans, schedule_tool
 
-# Load env
-load_dotenv(override=True)
+load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
-MODEL = os.getenv("MODEL")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+# L1 擋下不安全輸入時回給使用者的訊息
+_REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方式重新提問。"
+# L3 驗證未通過時回給使用者的訊息(寧可不回課表,也不給錯誤課表)
+_INVALID_OUTPUT_MSG = "抱歉,系統產生的課表未通過正確性檢查,請調整條件後再試一次。"
 
-logger = logging.getLogger("CourseLangchain")
+os.environ.setdefault(
+    "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
+)
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", os.getenv("LANGFUSE_PUBLIC_KEY") or "")
+os.environ.setdefault("LANGFUSE_SECRET_KEY", os.getenv("LANGFUSE_SECRET_KEY") or "")
+
+logger = logging.getLogger("CourseLangGraph")
 logger.setLevel(logging.DEBUG)
+
+public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+if public_key and secret_key:
+    langfuse_handler = CallbackHandler()
+    logger.info(f"Langfuse tracing enabled: {os.getenv('LANGFUSE_BASE_URL')}")
+else:
+    langfuse_handler = None
+    logger.warning("Langfuse credentials not set - tracing disabled")
 
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
-
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+# handler 掛在 root 上,不是只掛給 CourseLangGraph —— tools/ 與 harness/ 用的是
+# getLogger(__name__),只設定 CourseLangGraph 的話它們的 INFO 全部無聲消失。
+# text_to_sql 記錄「送出什麼、收回什麼」正是要靠這個才看得到。
+root = logging.getLogger()
+if not root.handlers:
+    root.addHandler(ch)
+root.setLevel(logging.INFO)
 
-class CourseLangChain:
-    def __init__(
-        self,
-        pickleFile="vectorstore.pkl",
-        cli=False,
-    ) -> None:
+# httpx 每發一個請求就 INFO 一行,開了 root 之後會把真正的訊息淹掉。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-        # Model Name Defination
-        prompt = get_prompt()
-        # logger.info("Prompt Template:\n" + prompt)
 
-        with open(pickleFile, "rb") as f:
-            retriever: EnsembleRetriever = pickle.load(f)
+# on_tool_start 時送給前端的進度文字。刻意做成「工具名 → 人話」的對照表:
+# 工具名不外流,前端只拿到可以直接顯示的句子,也就不必跟著後端的工具清單一起改。
+# 對照不到的工具就不送——寧可不顯示進度,也不要把內部名稱漏出去。
+_TOOL_STATUS = {
+    "text_to_sql_tool": "正在解析時間條件…",
+    retrieve_tool.name: "正在查詢課程…",   # 不寫死:工具改名時 import 會先炸,不會靜默失效
+    "course_detail_tool": "正在讀課程大綱…",
+    schedule_tool.name: "正在排課…",   # 同上:側通道也靠這個名字,不能靜默失效
+    "my_schedule_tool": "正在更新你的課表…",
+    "preference_order_tool": "正在查歷年志願序…",
+    "user_profile_tool": "正在讀取修課紀錄…",
+}
 
-        model = OllamaLLM(
-            model=MODEL,
-            base_url=OLLAMA_HOST,
-            stop=["<|eot_id|>"],
+
+def _check_tool_status_keys() -> None:
+    """確保 _TOOL_STATUS 的每個 key 都是實際註冊的工具名。
+
+    工具一旦改名,進度提示只會安靜地不再出現 —— 畫面上沒有任何錯誤可循,
+    而側通道的候選課程也會跟著消失。寧可在開機時大聲失敗。
+    """
+    from tools.registry import all_tools
+
+    known = {getattr(t, "name", "") for t in all_tools()}
+    unknown = sorted(set(_TOOL_STATUS) - known)
+    if unknown:
+        raise RuntimeError(
+            f"_TOOL_STATUS 含有未註冊的工具名:{unknown}。"
+            "工具可能被改名或移除,請同步更新 main.py 的對照表。"
         )
 
-        def format_docs(docs):
-            return "\n".join(f"- {doc.page_content}" for doc in docs)
 
-        self.chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | model
-            | StrOutputParser()
+# 模型把工具呼叫寫成文字時的樣子:一個只有 name/arguments 的 JSON 物件。
+# 實測 qwen2:7b 有時完全不使用 tool calling 機制,直接把
+# {"name": "my_schedule_tool", "arguments": {...}} 當成**最終答案**吐出來 ——
+# 那則訊息沒有 tool_calls 可判斷,只能看內容本身。
+#
+# 刻意只認這個特定形狀(頂層 key 不超出 name/arguments/parameters),
+# 而不是「看起來像 JSON 就擋」—— 否則使用者真的要求 JSON 輸出時會被誤殺。
+_FENCE_HEAD = re.compile(r"^\s*(?:```(?:json)?\s*)+")
+_FENCE_TAIL = re.compile(r"(?:\s*```)+\s*$")
+_TOOL_CALL_LEAK_MSG = (
+    "抱歉,這次沒能整理出結果。請換個問法,或把需求說得更具體一點再試一次。"
+)
+
+
+def _is_tool_call_text(content: str) -> bool:
+    text = _FENCE_TAIL.sub("", _FENCE_HEAD.sub("", content)).strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return False
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return (
+        isinstance(obj, dict)
+        and "name" in obj
+        and set(obj) <= {"name", "arguments", "parameters"}
+    )
+
+
+def _tool_output_text(event: dict) -> str:
+    """取 on_tool_end 事件裡的工具回傳文字。
+
+    langgraph 依版本可能給 ToolMessage 物件或原始 str,兩種都要能取到內容。
+    """
+    output = (event.get("data") or {}).get("output")
+    return str(getattr(output, "content", output) or "")
+
+
+class CourseLangGraph:
+    def __init__(self, cli: bool = False) -> None:
+        # 資料成品與 contract.yaml 必須對得上,否則寧可不啟動(memo,每個 process 一次)
+        check_contract()
+        _check_tool_status_keys()
+        self.brain_agent = brain_agent
+        # L2:把 ReAct graph 包進安全外殼(step / timeout / exception 防護)
+        self.executor = SafeAgentExecutor(brain_agent)
+        logger.info("Brain Agent (ReAct) ready,三層 harness 已啟用。")
+
+    def _base_config(self, thread_id: str | None = None) -> RunnableConfig:
+        """組 LangGraph config。
+
+        thread_id 是對話記憶的鍵:同一個 thread_id 的多輪才會共用歷史。
+        沒帶時發一個一次性 id——agent 掛了 checkpointer,少了 thread_id 會直接 raise,
+        用一次性 id 等同「這輪無記憶」,比讓呼叫端炸掉好。
+        """
+        # 標成 RunnableConfig(TypedDict)而非普通 dict:LangChain 的 astream_events /
+        # invoke 都要求這個型別,傳普通 dict 執行期雖然可行,但型別檢查器會報錯。
+        config: RunnableConfig = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+        config["configurable"] = {"thread_id": thread_id or f"ephemeral-{uuid.uuid4()}"}
+        return config
+
+    def invoke(self, user_input: str, thread_id: str | None = None) -> str:
+        # L1:輸入清理
+        text, is_safe = sanitize_input(user_input)
+        if not is_safe:
+            logger.warning("input rejected by L1 sanitizer")
+            return _REJECT_MSG
+
+        # L2:安全外殼執行(永不 raise)
+        result = self.executor.run(text, config=self._base_config(thread_id))
+        output = result["output"]
+        logger.info(
+            "agent done: steps=%s elapsed=%ss error=%s",
+            result["steps"], result["elapsed_sec"], result["error"],
         )
-        logger.info("Chain ready.")
+        if result["error"]:
+            return output  # 已是友善訊息
 
-    def invoke(self, input) -> str:
-        return self.chain.invoke(input)
+        # L3:輸出驗證(衝堂等)
+        ok, msg = validate_output(output)
+        if not ok:
+            logger.warning("output rejected by L3: %s", msg)
+            return _INVALID_OUTPUT_MSG
+        return output
+
+    async def astream(self, user_input: str, thread_id: str | None = None):
+        """逐段產出回覆。
+
+        yield 兩種型別,呼叫端(app.py)要分開處理:
+        - `str`:**最終答案**的完整文字(不是逐 token;ReAct 中間那幾則帶
+          tool_calls 的訊息刻意不送,否則模型把工具呼叫寫成文字時會顯示在畫面上)
+        - `dict`:側通道事件,目前有三種
+          - `{"type": "status", "text": ...}`:工具開始執行的進度提示(不含工具名)
+          - `{"type": "courses", "courses": [...]}`:候選課程,course_id 直接取自
+            工具輸出、不經 LLM 轉述
+          - `{"type": "plans", "plans": [...]}`:排課方案(含每門課的 course_id),
+            前端據此提供「一鍵套用整份方案」;方案編號與回覆文字裡的「方案 N」一致
+        """
+        # L1:輸入清理(串流路徑同樣先擋)
+        text, is_safe = sanitize_input(user_input)
+        if not is_safe:
+            logger.warning("input rejected by L1 sanitizer (stream)")
+            yield _REJECT_MSG
+            return
+
+        # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
+        # 不套用(會切斷已輸出的 token)。L3 輸出驗證亦因逐 token 串流無法即時套用,
+        # 改在非串流 invoke 路徑把關。
+        config: RunnableConfig = {
+            **self._base_config(thread_id),
+            "recursion_limit": self.executor.recursion_limit,
+        }
+        seen_ids: set[str] = set()
+        async for event in self.brain_agent.astream_events(
+            {"messages": [{"role": "user", "content": text}]},
+            config=config,
+            version="v2",
+        ):
+            kind = event.get("event")
+            if kind == "on_chat_model_end":
+                # 只送「最終答案」那一則。ReAct 迴圈裡每一次 LLM 呼叫都會產生文字,
+                # 但帶 tool_calls 的那些是過程,不該進畫面 —— 小模型常把工具呼叫
+                # 寫成 ```json {"name": ...} 這種文字,先前會原樣顯示給使用者。
+                #
+                # 代價:最終答案不再逐字串流,而是一次到位。在本機(CPU-only,單次
+                # 呼叫以分鐘計)這個取捨划算 —— 等待期間的「還活著」訊號由
+                # on_tool_start 的進度提示與前端計時器負責,不必靠中間文字。
+                msg = (event.get("data") or {}).get("output")
+                if msg is not None and not getattr(msg, "tool_calls", None):
+                    content = getattr(msg, "content", "") or ""
+                    if isinstance(content, list):  # 有些 provider 回結構化 content
+                        content = "".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in content
+                        )
+                    if content.strip():
+                        if _is_tool_call_text(content):
+                            logger.warning(
+                                "模型把工具呼叫當成最終答案輸出,已攔下不顯示給使用者"
+                            )
+                            yield _TOOL_CALL_LEAK_MSG
+                        else:
+                            yield content
+            elif kind == "on_tool_start":
+                # 進度提示。ReAct 在 CPU-only 下一題要數分鐘,中間必須讓使用者
+                # 看得出還在跑;但顯示的是人話,不是工具名。
+                # 外部 MCP 工具不在對照表裡(名字由對方決定),依來源給通用提示
+                name = event.get("name") or ""
+                status = _TOOL_STATUS.get(name) or mcp_tool_status(name)
+                if status:
+                    yield {"type": "status", "text": status}
+            elif kind == "on_tool_end" and event.get("name") == retrieve_tool.name:
+                # 側通道:候選課程直接取自工具輸出,不經 LLM 轉述,前端據此畫
+                # 「加入課表」按鈕——徹底避開模型抄錯 13 碼 course_id 的風險。
+                # 排課時同一輪可能查兩次,用 seen_ids 去重。
+                fresh = [
+                    c
+                    for c in parse_formatted_docs(_tool_output_text(event))
+                    if c["course_id"] not in seen_ids
+                ]
+                if fresh:
+                    seen_ids.update(c["course_id"] for c in fresh)
+                    yield {"type": "courses", "courses": fresh}
+            elif kind == "on_tool_end" and event.get("name") == schedule_tool.name:
+                # 側通道:排課方案的結構化版本(含 course_id),前端據此畫「套用此方案」。
+                # 給模型讀的 Markdown 刻意沒有 id,所以這裡不是解析工具輸出,而是拿
+                # 那串輸出當鑰匙,把工具排課當下就備好的結構化方案領出來
+                # (見 tools/schedule_tool.py 的 _PLAN_CACHE)。
+                plans = pop_plans(_tool_output_text(event))
+                if plans:
+                    yield {"type": "plans", "plans": plans}
+        logger.info("Brain Agent execution completed")
 
 
 async def main():
-    chain = CourseLangChain(cli=True)
+    agent = CourseLangGraph(cli=True)
+    # 整個 REPL 共用一個 thread_id,多輪追問才接得起來(輸入 new 可開新對話)
+    thread_id = f"cli-{uuid.uuid4()}"
     while True:
-        query = input("User:")
+        query = input("User: ")
+        if query.lower() in ["exit", "quit", "q"]:
+            break
+        if query.lower() == "new":
+            thread_id = f"cli-{uuid.uuid4()}"
+            print("(已開始新對話,先前的上下文不再沿用)\n")
+            continue
         print("Bot:")
-        async for chunk in chain.chain.astream(query):
-            print(chunk, end="", flush=True)
+        result = agent.invoke(query, thread_id=thread_id)
+        print(result)
+        print()
+    if langfuse_handler:
+        get_client().flush()
 
 
 if __name__ == "__main__":

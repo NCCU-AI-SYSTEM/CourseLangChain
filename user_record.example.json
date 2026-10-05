@@ -1,0 +1,86 @@
+[
+  {
+    "課業學習": {
+      "_說明": "這是去識別化的『成績單 JSON』範本。實際使用時,請從校務系統匯出你自己的成績單,存成 user_record.json(已被 .gitignore 擋下,不會進版控)。本工具只讀取、不儲存,且不會送出姓名/學號。",
+      "gradeRecordList": [
+        {
+          "AcademicYear": "114",
+          "GradeRecords": [
+            {
+              "academicYear": "114",
+              "score": "成績未到或無成績",
+              "requiredOrElectiveCourse": "群",
+              "academicYearSemester": "1142",
+              "credit": "3.0",
+              "courseName": "資料庫系統",
+              "remark": "",
+              "semester": "2",
+              "courseCode": "703025001"
+            },
+            {
+              "academicYear": "114",
+              "score": "88.00",
+              "requiredOrElectiveCourse": "選",
+              "academicYearSemester": "1141",
+              "credit": "3.0",
+              "courseName": "機器學習概論",
+              "remark": "",
+              "semester": "1",
+              "courseCode": "703901001"
+            },
+            {
+              "academicYear": "114",
+              "score": "停修",
+              "requiredOrElectiveCourse": "選",
+              "academicYearSemester": "1141",
+              "credit": "3.0",
+              "courseName": "範例停修課",
+              "remark": "",
+              "semester": "1",
+              "courseCode": "000000001"
+            }
+          ]
+        },
+        {
+          "AcademicYear": "113",
+          "GradeRecords": [
+            {
+              "academicYear": "113",
+              "score": "73.00",
+              "requiredOrElectiveCourse": "必",
+              "academicYearSemester": "1132",
+              "credit": "3.0",
+              "courseName": "演算法",
+              "remark": "",
+              "semester": "2",
+              "courseCode": "703022001"
+            },
+            {
+              "academicYear": "113",
+              "score": "71.00",
+              "requiredOrElectiveCourse": "必",
+              "academicYearSemester": "1131",
+              "credit": "3.0",
+              "courseName": "資料結構",
+              "remark": "",
+              "semester": "1",
+              "courseCode": "703008001"
+            }
+          ]
+        }
+      ],
+      "aboutMe": {
+        "departmentProgramGrade": "資訊三",
+        "registerMajor": "資訊科學系"
+      },
+      "totalCredits": "95",
+      "coursePlan": {
+        "graduationCredit": "128.0",
+        "requiredRemark": "[缺程式能力檢定1]",
+        "commonPhysical": "[體育欠2門]",
+        "liberalTotal": "[通識尚缺7學分]",
+        "groupRemark": "[群A缺1門][群B缺1門]"
+      }
+    }
+  }
+]

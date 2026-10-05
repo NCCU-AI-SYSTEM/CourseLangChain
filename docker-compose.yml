@@ -1,22 +1,71 @@
 services:
-  courselangchain:
+  postgres:
+    image: paradedb/paradedb:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: academic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d academic"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    volumes:
+      - pgdata:/var/lib/postgresql/18/docker
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  app:
+    profiles: [app]
     build:
-      args:
-        PROJECT_PATH: /course-langchain
       context: .
       dockerfile: Dockerfile
-    environment:
-      - OLLAMA_HOST=${OLLAMA_HOST}
-      - MODEL=${MODEL}
+      target: prod
+      args:
+        PROJECT_PATH: /course-langchain
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
+      USE_SQLITE: "false"
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://host.docker.internal:11434}
+      LANGFUSE_BASE_URL: ${DOCKER_LANGFUSE_BASE_URL:-http://host.docker.internal:3000}
+      MODEL: ${MODEL:-llama3.1:8b}
+      USE_GOOGLE_AI: ${USE_GOOGLE_AI:-false}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-3.6-flash}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      EMBED_DEVICE: ${EMBED_DEVICE:-cpu}
+      RRF_K: ${RRF_K:-60}
+      RRF_CANDIDATES: ${RRF_CANDIDATES:-50}
+      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-600}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+      # 外部 MCP 工具(校內網站檢索)。容器裡的 localhost 是容器自己,所以吃 DOCKER_ 開頭那個;
+      # 留空 = 不啟用。
+      CAMPUS_WEB_MCP_URL: ${DOCKER_CAMPUS_WEB_MCP_URL:-}
+      MOODLE_MCP_URL: ${DOCKER_MOODLE_MCP_URL:-}
+    volumes:
+      - ./contract.yaml:/course-langchain/contract.yaml:ro
+      # The query encoder (~400MB) is downloaded on the first query, not baked
+      # into the image. Without this the download restarts from zero on every
+      # container recreate — and a stalled fetch leaves the first query hanging.
+      # Linux/WSL 專用修正:具名 volume 的掛載點由 Docker 以 root 建立,而容器以
+      # uid 1000(user) 執行 → 寫不進去,模型下載會 PermissionError,retrieve_tool
+      # 直接回 ERROR。改掛主機的 HF 快取(屬 uid 1000),順便沿用已下載的模型。
+      # macOS 的 Docker Desktop 沒有這個問題,原本的具名 volume 在那邊可用。
+      - ${HOME}/.cache/huggingface:/home/user/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
     command: ["python", "app.py"]
+
+volumes:
+  pgdata:
+  hfcache:
