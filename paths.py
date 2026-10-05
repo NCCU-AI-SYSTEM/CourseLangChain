@@ -50,6 +50,16 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 USE_GOOGLE_AI = os.getenv("USE_GOOGLE_AI", "false").lower() == "true"
 
+# LLM 供應者:ollama / google / openai(任何 OpenAI 相容端點,例如 LiteLLM proxy)。
+# 沒設就照舊看 USE_GOOGLE_AI,舊的 .env 不用改。
+LLM_PROVIDER = (
+    os.getenv("LLM_PROVIDER") or ("google" if USE_GOOGLE_AI else "ollama")
+).strip().lower()
+
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL") or MODEL
+
 # Gemini 型號。**不要寫死在程式裡** —— Google 會讓舊型號對「新申請的金鑰」停用,
 # 實測 gemini-2.5-flash 回 404「no longer available to new users」,而同一把金鑰
 # 仍能列出 40 個可用模型。寫死的話,換一把金鑰就壞。

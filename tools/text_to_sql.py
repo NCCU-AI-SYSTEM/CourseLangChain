@@ -4,22 +4,15 @@ import time
 from warnings import deprecated
 
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
 # ChatOllama(/api/chat),不是 OllamaLLM(/api/generate)。raw completion 沒有 chat
 # template,thinking 模型少了界定思考區塊的結構就停不下來 —— 實測同一個 prompt,
 # OllamaLLM 370 秒未返回,ChatOllama + reasoning=False 21.7 秒、done_reason=stop、
 # 思考區塊 0 字。prompt 裡寫「不要思考過程」擋不住(那是文字指示),num_predict 也
 # 擋不住(只會在思考中途被切斷,回空字串)。
-from langchain_ollama import ChatOllama
+# (實作在 utils/llm.py 的 get_chat_llm(extract=True))
 
-from paths import (
-    GOOGLE_API_KEY,
-    MODEL,
-    OLLAMA_HOST,
-    SQLITE_DEPRECATION_MSG,
-    USE_GOOGLE_AI,
-    USE_SQLITE,
-)
+from paths import SQLITE_DEPRECATION_MSG, USE_SQLITE
+from utils.llm import get_chat_llm
 from tools.constraints import constraints_to_where, parse_timefilter_from_json
 from .registry import register_tool
 
@@ -96,25 +89,10 @@ def _sqlite_glob_path(user_input: str) -> str:
     PostgreSQL 路徑改成先產結構化 JSON 再轉 WHERE(_pg_json_path + constraints.py),
     那條路好得多 —— 新功能請只做在那邊。
     """
-    if USE_GOOGLE_AI:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.3,
-            google_api_key=GOOGLE_API_KEY,
-        )
-    else:
-        # num_predict 是保險絲,不是修法 —— 實測它擋不住失控生成(/api/generate 版本
-        # 設了 256 仍然 300 秒不返回)。真正讓它停下來的是 reasoning=False。
-        # 這裡設 512 純粹是上限:實測輸出 73-324 字、156 tokens,有三倍餘裕。
-        # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
-        # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
-        llm = ChatOllama(
-            model=MODEL,
-            base_url=OLLAMA_HOST,
-            reasoning=False,
-            num_predict=512,
-            temperature=0,
-        )
+    # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+    # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
+    # extract=True 關掉 thinking 並把輸出上限設 512(保險絲,不是修法)。
+    llm = get_chat_llm(temperature=0, extract=True)
 
     prompt = f"""你是 SQL Agent，專門將時間限制轉換為 SQL WHERE 子句。
 
@@ -142,25 +120,10 @@ time 欄位格式說明：
 
 
 def _pg_json_path(user_input: str) -> str:
-    if USE_GOOGLE_AI:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.3,
-            google_api_key=GOOGLE_API_KEY,
-        )
-    else:
-        # num_predict 是保險絲,不是修法 —— 實測它擋不住失控生成(/api/generate 版本
-        # 設了 256 仍然 300 秒不返回)。真正讓它停下來的是 reasoning=False。
-        # 這裡設 512 純粹是上限:實測輸出 73-324 字、156 tokens,有三倍餘裕。
-        # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
-        # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
-        llm = ChatOllama(
-            model=MODEL,
-            base_url=OLLAMA_HOST,
-            reasoning=False,
-            num_predict=512,
-            temperature=0,
-        )
+    # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+    # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
+    # extract=True 關掉 thinking 並把輸出上限設 512(保險絲,不是修法)。
+    llm = get_chat_llm(temperature=0, extract=True)
 
     prompt = f"""你是課程查詢 Agent，將使用者的時間/課程限制轉換成結構化 JSON。
 

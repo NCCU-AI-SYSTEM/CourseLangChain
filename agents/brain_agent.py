@@ -1,8 +1,6 @@
 import os
 
 from langchain_core.messages import SystemMessage, trim_messages
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
@@ -15,15 +13,7 @@ from tools.schedule_tool import schedule_tool
 from tools.text_to_sql import text_to_sql_tool
 from tools.user_profile import user_profile_tool
 
-# Settings come from paths.py so there is one reader per setting.
-from paths import (
-    GOOGLE_API_KEY,
-    GOOGLE_MODEL,
-    MODEL,
-    OLLAMA_HOST,
-    OLLAMA_NUM_CTX,
-    USE_GOOGLE_AI,
-)
+from utils.llm import get_chat_llm
 
 
 
@@ -218,18 +208,7 @@ def _moodle_prompt(tools: list) -> str:
 
 def _get_chat_llm():
     """Brain Agent 必須使用支援 tool calling 的 Chat 介面（不是 OllamaLLM）。"""
-    if USE_GOOGLE_AI:
-        return ChatGoogleGenerativeAI(
-            model=GOOGLE_MODEL,
-            temperature=0.3,
-            google_api_key=GOOGLE_API_KEY,
-        )
-    return ChatOllama(
-        model=MODEL,
-        base_url=OLLAMA_HOST,
-        temperature=0.3,
-        num_ctx=OLLAMA_NUM_CTX,
-    )
+    return get_chat_llm(temperature=0.3)
 
 
 # 送進 LLM 的歷史訊息則數上限(不含 system prompt)。
