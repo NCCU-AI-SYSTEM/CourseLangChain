@@ -62,6 +62,18 @@ GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemini-3.6-flash")
 # 重複呼叫工具直到撞步數上限。先前誤判為「小模型 tool calling 能力不足」。
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 
+# ── External MCP tools (env) ─────────────────────────────────────────────────
+
+# 另一組維護的校內網站檢索服務(MCP streamable HTTP 端點,例如 http://localhost:8765/mcp)。
+# 留空 = 不啟用:agent 只有本地的課程工具,行為與加入 MCP 之前完全相同。
+# 設了但連不上也只會 log 警告、照常啟動(見 tools/mcp_tools.py)。
+CAMPUS_WEB_MCP_URL = os.getenv("CAMPUS_WEB_MCP_URL", "").strip()
+
+# 使用者本人的 NCCU Moodle(Daniel 維護的 nccu-moodle-mcp,例如 http://localhost:3033/mcp)。
+# 帳密**不在這裡**:每位使用者在網頁上自己登入,只存在後端記憶體(見 tools/session_moodle.py)。
+# 留空 = 不啟用。
+MOODLE_MCP_URL = os.getenv("MOODLE_MCP_URL", "").strip()
+
 # ── Data files ───────────────────────────────────────────────────────────────
 
 DATA_DB = os.path.join(PROJECT_ROOT, "data.db")

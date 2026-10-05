@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from tools.course_detail import course_detail_tool
+from tools.mcp_tools import campus_web_tools, moodle_tools
 from tools.my_schedule import my_schedule_tool
 from tools.preference_order import preference_order_tool
 from tools.retrieve import retrieve_tool
@@ -132,6 +133,88 @@ SYSTEM_PROMPT = """你是 NCCU 課程查詢系統的 Brain Agent（大腦）。
 - 若工具回傳「找不到」之類訊息 → 直接回覆「抱歉,沒有找到符合條件的課程」。
 """
 
+# 外部 MCP 工具(校內網站檢索)的說明與意圖 E。**只在工具真的載入時才接到 SYSTEM_PROMPT 後面**
+# —— prompt 提到不存在的工具,模型會照樣去「呼叫」它,或乾脆捏造它的回傳。
+# 工具名與說明直接取自 MCP server 回報的內容,對方改名時這裡不必跟著改。
+_CAMPUS_WEB_PROMPT = """
+# 外部工具:校內網站資料
+{tool_lines}
+這類工具查的是學校各單位網站(教務處、註冊組等)的公告與規章,**不是課程資料庫**。
+
+## E. 校內行政與規章問答
+條件:問的是學校行政、規章、單位資訊、公告、申請流程等**需要查證的校務事實**
+     (如「註冊組在哪」「休學要怎麼辦」「加退選什麼時候」)。
+消歧規則:
+- 要找「有哪些課 / 某門課的內容 / 排課 / 志願序」→ 走 B/C/D/D2,不要用上面的校內網站工具。
+- 意圖 A 裡「選課系統什麼時候開」這類**涉及日期、規定**的問題,改走 E 查證,不要憑印象回答;
+  寒暄與閒聊仍走 A。
+動作:呼叫校內網站工具一次,把使用者問題的重點當作 query。
+輸出格式:只根據工具回傳的內容回答,條列重點,最後一行附「資料來源」網址(照抄工具給的,不可自己編)。
+     工具回傳「找不到」或 ERROR → 直接說目前查不到這項資訊,建議到相關單位網站確認,不要自己補答案
+     (這條優先於通用規則裡「沒有找到符合條件的課程」那句)。
+"""
+
+
+def _tool_lines(tools: list) -> str:
+    """工具名、參數與說明的第一段(完整說明已經在工具 schema 裡,這裡不重複塞)。"""
+    return "\n".join(
+        f"- {t.name}({', '.join(t.args)})\n"
+        f"  {' '.join((t.description or '').strip().split(chr(10) * 2)[0].split())}"
+        for t in tools
+    )
+
+
+def _campus_web_prompt(tools: list) -> str:
+    """外部工具的 prompt 區塊;沒有載入任何外部工具時回空字串。"""
+    if not tools:
+        return ""
+    return _CAMPUS_WEB_PROMPT.format(tool_lines=_tool_lines(tools))
+
+
+# 使用者本人的 Moodle(nccu-moodle-mcp)。同樣**只在工具真的載入時才接上**。
+# role 對照表寫死在這裡,是因為模型會自己把不認得的角色代碼「翻譯」成最接近的中文 ——
+# 曾經在 Claude Code 裡看到非 student 的角色被顯示成「學生」。表外的代碼一律照原文。
+_MOODLE_PROMPT = """
+# 外部工具:使用者本人的 Moodle(每位使用者要先在畫面上登入)
+{tool_lines}
+這些工具查的是**使用者自己**在 Moodle 上的資料(修的課、作業與繳交狀態、截止日期、成績、公告、通知、教材),
+**不是全校課程資料庫**。
+
+## F. 我的 Moodle
+條件:問的是使用者**自己**的作業、繳交狀態、截止日期、測驗、成績、課程公告、通知或教材,
+     或「我這學期在 Moodle 上修了哪些課」。
+消歧規則:
+- 找「可以選哪些課 / 某門課的課綱 / 排課 / 志願序」→ 走 B/C/D/D2。Moodle 的 list_courses、search_courses
+  只列出使用者**已經修的**課,不能拿來找可以選的課。
+- 校規、行政流程、單位資訊 → 走 E。
+- Moodle 工具要的 course_id 是 Moodle 自己的編號,先用 Moodle 的課程工具查;不可拿 retrieve_tool 的 13 碼課號去填。
+- **作業與截止日期的工具預設只回「角色是 student 的課」**,旁聽(other student)、助教
+  (teaching assistant)、授課教師的課都會被濾掉。使用者提到旁聽或助教的課、問到某門沒出現的課、
+  或要求「全部」時,帶 `include_all_role=true` 重查一次,並在回答裡註明那門課的角色。
+動作:呼叫對應的 Moodle 工具。
+- 回傳「還沒有連結 Moodle 帳號」→ 請使用者先在畫面上登入 Moodle。不要重試,**也不要請使用者在對話裡輸入密碼**。
+- 回傳「Moodle 登入失敗」→ 請使用者重新登入,**絕對不要重試**(連續失敗會被學校鎖帳號)。
+輸出格式:條列重點,日期照工具給的寫,每一筆都附上工具給的網址。
+     **工具回傳幾筆就列幾筆,不要自行挑選或省略** —— 使用者問「這週」但工具回的是更長區間時,
+     先講清楚實際涵蓋的區間,再把清單完整列出。
+     作業欄位的語意要照實轉述,不可合併或推論:
+     - `due` 是**繳交期限**、`cutoff` 是**關閉時間**(逾期後還能補交到這一刻),兩者分開寫。
+     - `status` 只有 graded(已評分)/ submitted(已繳交)/ not submitted(未繳交)三種,照實翻譯。
+     - **不要自己判斷有沒有逾期。** `list_assignments` 沒有逾期資訊;你也不知道今天幾號。
+       需要講逾期時,以 `upcoming_deadlines` 回的 `overdue` 欄位為準(那是 Moodle 給的)。
+     role 欄位是 Moodle 角色代碼:student=學生、**otherstudent=旁聽生**、editingteacher=授課教師、
+     teacher=教師或助教、teachingassistant=助教、manager=管理者;
+     **不在這張表裡的代碼照原文顯示,不要自己翻譯**(曾經把 otherstudent 說成「學生」)。
+     查不到就照實說查不到(這條優先於通用規則裡「沒有找到符合條件的課程」那句)。
+"""
+
+
+def _moodle_prompt(tools: list) -> str:
+    """Moodle 工具的 prompt 區塊;沒有載入時回空字串。"""
+    if not tools:
+        return ""
+    return _MOODLE_PROMPT.format(tool_lines=_tool_lines(tools))
+
 
 def _get_chat_llm():
     """Brain Agent 必須使用支援 tool calling 的 Chat 介面（不是 OllamaLLM）。"""
@@ -191,18 +274,28 @@ def build_brain_agent():
     依賴這個)。刻意用 in-memory 而非 SqliteSaver——歷史裡含 user_profile_tool 解析出的
     修課狀況,落地存檔會牴觸「僅本次使用、不儲存」的隱私承諾。程序重啟即清空。
     """
+    local_tools = [
+        text_to_sql_tool,
+        retrieve_tool,
+        course_detail_tool,
+        schedule_tool,
+        user_profile_tool,
+        my_schedule_tool,
+        preference_order_tool,
+    ]
+    # 外部 MCP 工具(校內網站檢索、使用者本人的 Moodle)。沒設網址或連不上時是空清單,
+    # agent 的工具與 prompt 都與加入 MCP 之前完全相同。
+    # reserved 逐步累加:外部工具不可與本地工具、也不可與先載入的外部工具同名。
+    reserved = {t.name for t in local_tools}
+    web_tools = campus_web_tools(reserved_names=reserved)
+    reserved |= {t.name for t in web_tools}
+    moodle = moodle_tools(reserved_names=reserved)
     return create_react_agent(
         model=_get_chat_llm(),
-        tools=[
-            text_to_sql_tool,
-            retrieve_tool,
-            course_detail_tool,
-            schedule_tool,
-            user_profile_tool,
-            my_schedule_tool,
-            preference_order_tool,
-        ],
-        prompt=SystemMessage(content=SYSTEM_PROMPT),
+        tools=[*local_tools, *web_tools, *moodle],
+        prompt=SystemMessage(
+            content=SYSTEM_PROMPT + _campus_web_prompt(web_tools) + _moodle_prompt(moodle)
+        ),
         pre_model_hook=_trim_history,
         checkpointer=InMemorySaver(),
     )

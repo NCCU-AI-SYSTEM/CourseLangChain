@@ -14,6 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from agents.brain_agent import brain_agent
 from harness import SafeAgentExecutor, sanitize_input, validate_output
 from paths import check_contract
+from tools.mcp_tools import tool_status as mcp_tool_status
 from tools.retrieve import parse_formatted_docs, retrieve_tool
 from tools.schedule_tool import pop_plans, schedule_tool
 
@@ -237,7 +238,9 @@ class CourseLangGraph:
             elif kind == "on_tool_start":
                 # 進度提示。ReAct 在 CPU-only 下一題要數分鐘,中間必須讓使用者
                 # 看得出還在跑;但顯示的是人話,不是工具名。
-                status = _TOOL_STATUS.get(event.get("name") or "")
+                # 外部 MCP 工具不在對照表裡(名字由對方決定),依來源給通用提示
+                name = event.get("name") or ""
+                status = _TOOL_STATUS.get(name) or mcp_tool_status(name)
                 if status:
                     yield {"type": "status", "text": status}
             elif kind == "on_tool_end" and event.get("name") == retrieve_tool.name:
