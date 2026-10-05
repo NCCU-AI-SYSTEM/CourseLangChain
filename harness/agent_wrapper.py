@@ -133,10 +133,20 @@ class SafeAgentExecutor:
 
     @staticmethod
     def _count_steps(result: Any) -> int:
-        """以 messages 數扣掉首則 human 當作步數的粗估(telemetry 用)。"""
-        if isinstance(result, dict):
-            return max(0, len(result.get("messages", [])) - 1)
-        return 0
+        """本輪的步數:最後一則 human 之後的訊息數(telemetry 用)。
+
+        不能用 `len(messages) - 1` —— 開了對話記憶之後 graph 回傳的 messages 帶著
+        整段歷史,那個數字會隨輪數一路長大,第五輪會報成二十幾步。這裡只數最後一則
+        human 之後的訊息,才是這一輪真正走了幾步。
+        """
+        if not isinstance(result, dict):
+            return 0
+        messages = result.get("messages", [])
+        last_human = -1
+        for i, m in enumerate(messages):
+            if getattr(m, "type", None) == "human":
+                last_human = i
+        return max(0, len(messages) - last_human - 1)
 
     def _log_timeout(self, user_input: str) -> None:
         logger.warning("agent timeout(%.0fs): input=%r", self.timeout_sec, user_input[:80])
