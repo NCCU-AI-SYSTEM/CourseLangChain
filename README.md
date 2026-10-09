@@ -1,6 +1,4 @@
-# CourseLangGraph
-
-[![](https://dcbadge.vercel.app/api/server/n8w5qE4xyA)](https://discord.gg/n8w5qE4xyA)
+# CourseLangChain
 
 政大課程查詢 / 排課 agent。這個 repo 只負責**查詢**;課程資料的準備(schema、時間欄位、
 embedding)在另一個 repo [`course-data-prep`](#資料從哪裡來),產出一份 PostgreSQL 成品(`.sql.gz`)給這邊用。
@@ -122,8 +120,8 @@ uv run python -m tests.test_user_profile
 
 ## 前端
 
-**[CourseLangGraph-frontend](https://github.com/NCCUCourseScheduling/CourseLangGraph-frontend)**
+**[CourseLangGraph-frontend](https://github.com/NCCU-AI-System/CourseLangGraph-frontend)**
 
-## Final Report
+## Report
 
-[report](https://docs.google.com/document/d/1CkelC_x8B_QnVHEiIZisG1d8BJwXoYg02lqaqgbQlFY/edit?usp=sharing)
+[report]([https://docs.google.com/document/d/1CkelC_x8B_QnVHEiIZisG1d8BJwXoYg02lqaqgbQlFY/edit?usp=sharing](https://docs.google.com/document/d/1hH0jlfn79adLXgyjeiVMhIZCQxVbqo9Zi4HFuDOKfxo/edit?usp=sharing))
