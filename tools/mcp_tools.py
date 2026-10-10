@@ -15,7 +15,7 @@
    `SafeAgentExecutor.run` 與 `app.py` 的非串流端點走同步 `graph.invoke`,
    不補同步版本的話,那兩條路徑一呼叫就 NotImplementedError。
 3. **回傳統一成純文字。** 轉接器回的是 content block 清單;本專案的工具一律回 str,
-   main.py 取工具輸出、ChatOllama 組訊息都假設是字串。
+   main.py 取工具輸出、組 LLM 訊息都假設是字串。
 4. **依 session 帶 header(Moodle)。** nccu-moodle-mcp 是多人共用的無狀態 server,帳密放在
    每次請求的 HTTP header。包裝層從 LangGraph 注入的 `RunnableConfig` 取 thread_id
    (= 前端的 session_id),向 `session_moodle` 拿這位使用者的帳密,經 interceptor 塞進這一次呼叫。

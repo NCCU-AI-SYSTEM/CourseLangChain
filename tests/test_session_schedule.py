@@ -2,13 +2,14 @@
 
 跑:`.venv/bin/python -m tests.test_session_schedule`(在 CourseLangChain/ 下)
 
-用**真實 data.db** 取課,但只讀不寫;課表本身是純記憶體,測完 clear 掉。
+用**真實 PostgreSQL** 取課(先 `docker compose up -d postgres`),只讀不寫;
+課表本身是純記憶體,測完 clear 掉。
 """
 from __future__ import annotations
 
-import sqlite3
+import psycopg2
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
+from paths import COURSE_SEMESTER, COURSE_YEAR, DATABASE_URL
 from tools import session_schedule as store
 
 _PASS = 0
@@ -25,21 +26,35 @@ def check(cond: bool, msg: str) -> None:
         print(f"  ✗ FAIL: {msg}")
 
 
+def _course_rows(limit: int | None = None) -> list[tuple[str, str, str]]:
+    """本學期有上課時間的課:(id, name, time)。
+
+    PostgreSQL 的時間欄位叫 time_raw(跟 tools/session_schedule.py 的查法一致)。
+    """
+    sql = (
+        "SELECT id, name, time_raw FROM public.course WHERE y = %s AND s = %s "
+        "AND time_raw IS NOT NULL AND time_raw != '' ORDER BY id"
+    )
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (COURSE_YEAR, COURSE_SEMESTER))
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    finally:
+        conn.close()
+
+
 def _pick_courses() -> tuple[str, str, str]:
     """從真實 DB 挑三門課:A 與 B 時間完全相同(必衝堂),C 與 A 不衝堂。
 
     三門課**兩兩不同名**:同名課現在會被當成「同一門課的另一個班」互相替換,
     若挑到同名的組合,衝堂/並存這兩條測試就會測到錯誤的原因(甚至假性失敗)。
     """
-    conn = sqlite3.connect(DATA_DB)
-    try:
-        rows = conn.execute(
-            "SELECT id, name, time FROM COURSE WHERE y=? AND s=? "
-            "AND time IS NOT NULL AND time != '' LIMIT 4000",
-            (COURSE_YEAR, COURSE_SEMESTER),
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = _course_rows(limit=4000)
 
     name_of = {cid: n for cid, n, _t in rows}
     by_time: dict[str, list[str]] = {}
@@ -73,15 +88,7 @@ def _pick_same_name_pair() -> tuple[str, str]:
     這正是舊行為漏掉的情形:時間不衝突所以 has_conflict 放行,但實際上選課系統
     不讓你同時修兩班。
     """
-    conn = sqlite3.connect(DATA_DB)
-    try:
-        rows = conn.execute(
-            "SELECT id, name, time FROM COURSE WHERE y = ? AND s = ? "
-            "AND time IS NOT NULL AND time != ''",
-            (COURSE_YEAR, COURSE_SEMESTER),
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = _course_rows()
 
     def weekdays(t: str) -> set[str]:
         return {ch for ch in t if ch in "一二三四五六日"}

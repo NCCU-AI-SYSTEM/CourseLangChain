@@ -2,7 +2,7 @@ services:
   postgres:
     image: paradedb/paradedb:latest
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_DB: academic
       POSTGRES_USER: postgres
@@ -34,13 +34,10 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/academic
       USE_SQLITE: "false"
-      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://host.docker.internal:11434}
       LANGFUSE_BASE_URL: ${DOCKER_LANGFUSE_BASE_URL:-http://host.docker.internal:3000}
-      MODEL: ${MODEL:-llama3.1:8b}
-      USE_GOOGLE_AI: ${USE_GOOGLE_AI:-false}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-3.6-flash}
-      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      OPENAI_BASE_URL: ${DOCKER_OPENAI_BASE_URL:-http://host.docker.internal:4000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       EMBED_DEVICE: ${EMBED_DEVICE:-cpu}

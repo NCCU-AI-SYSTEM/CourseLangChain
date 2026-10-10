@@ -23,13 +23,20 @@
 | Docker | 資料庫一定要用(ParadeDB:PostgreSQL + `pg_search` + `pgvector`) |
 | [`uv`](https://github.com/astral-sh/uv) | 在 host 上跑 app 用;純 Docker 跑法可略過 |
 | Python ≥ 3.13 | 用到 PEP 702 的 `warnings.deprecated`;`uv` 會自己裝 |
-| [Ollama](https://github.com/ollama/ollama) | 本機 LLM。或改用 Google AI(見 `.env`) |
+| LLM 端點 | 任何 OpenAI 相容 API:LiteLLM proxy、Gemini、Ollama `/v1`…(寫法見 `.env.example`) |
 | Langfuse(可選) | 追蹤用,預設 `http://localhost:3000` |
 
-先確認 Ollama 有模型可用:
+先確認 LLM 端點連得到(換成你的網址與金鑰):
 
 ```sh
-ollama list
+curl -s -H "Authorization: Bearer $OPENAI_API_KEY" http://localhost:4000/v1/models
+```
+
+用 Ollama 的話,server 一定要這樣起,否則 context 只有 4096、agent 會悄悄失效
+(原因見 `.env.example`):
+
+```sh
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve
 ```
 
 ---
@@ -42,7 +49,7 @@ ollama list
 cp .env.example .env
 ```
 
-至少要改 `MODEL`(用 `ollama list` 看有哪些)。`USE_SQLITE` 保持 `false`。
+至少要填 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。`USE_SQLITE` 保持 `false`。
 設定都寫在 `.env` 裡。
 
 (embedding 模型、維度、學期這些「資料的屬性」不在 `.env`,在 `contract.yaml` ——
@@ -137,15 +144,13 @@ docker compose --profile app up -d
 > 換資料或改程式後重來:`docker compose --profile app down -v`。
 
 > [!IMPORTANT]
-> Ollama 預設只聽 `127.0.0.1`,容器連不到,查詢會回「系統暫時無法處理您的要求」。
-> 要讓它聽所有介面:
-> ```sh
-> OLLAMA_HOST=0.0.0.0 ollama serve
-> ```
-> 容器裡沒有 GPU,所以 LLM 一律留在 host 跑,compose 只把位址指過去。
-> 容器用的是 `.env` 裡的 `DOCKER_OLLAMA_HOST` / `DOCKER_LANGFUSE_BASE_URL`
-> (預設 `host.docker.internal`),**不是** `OLLAMA_HOST` / `LANGFUSE_BASE_URL` ——
-> 那兩個是 host 用的 `localhost`,帶進容器會變成連容器自己。
+> 容器用的是 `.env` 裡的 `DOCKER_OPENAI_BASE_URL` / `DOCKER_LANGFUSE_BASE_URL`
+> (預設 `host.docker.internal`),**不是** `OPENAI_BASE_URL` / `LANGFUSE_BASE_URL` ——
+> 那兩個是 host 用的 `localhost`,帶進容器會變成連容器自己。用 Gemini 這類遠端端點時,
+> `DOCKER_OPENAI_BASE_URL` 設成同一個網址即可。
+>
+> LLM 跑在 host 上(Ollama、LiteLLM)時,它要聽所有介面容器才連得到,否則查詢會回
+> 「系統暫時無法處理您的要求」。Ollama 是 `OLLAMA_HOST=0.0.0.0 ollama serve`。
 
 ## 2-5. 確認能動
 
@@ -190,7 +195,7 @@ curl -s -u "pk-lf-...:sk-lf-..." \
   "http://localhost:3000/api/public/traces?limit=5" | jq '.meta.totalItems'
 ```
 
-一筆 trace 裡看得到整個 ReAct 迴圈:`[AGENT] agent` → `[GENERATION] ChatOllama`
+一筆 trace 裡看得到整個 ReAct 迴圈:`[AGENT] agent` → `[GENERATION] ChatOpenAI`
 → `[TOOL] retrieve_tool` → `[CHAIN] should_continue`。
 
 ---
@@ -245,7 +250,7 @@ AGENT_TIMEOUT_SEC=900
 host 與容器都吃這一份 —— `paths.py` 用 `load_dotenv` 讀它,compose 也拿它做變數展開。
 改完 host 直接重跑,容器 `docker compose --profile app up -d app`。
 
-雲端模型(Google AI)快得多,可以往下調。
+雲端模型(例如 Gemini)快得多,可以往下調。
 
 Ollama 一次只跑一個請求。前一個查詢被 client 端砍掉時,伺服器那邊還會繼續算完,
 後面的請求就排在後面等 —— 症狀是連 `curl /api/chat` 都沒反應,但 `/api/tags` 秒回。
@@ -253,7 +258,8 @@ Ollama 一次只跑一個請求。前一個查詢被 client 端砍掉時,伺服�
 
 ### Docker 跑 app,查詢都回「系統暫時無法處理」
 
-多半是容器連不到 Ollama。見 2-4(B) —— 要 `OLLAMA_HOST=0.0.0.0 ollama serve`。
+多半是容器連不到 LLM。檢查 `DOCKER_OPENAI_BASE_URL`,並確認 host 上的 LLM 有聽
+`0.0.0.0`(見 2-4(B))。
 
 ### 檢索結果很不準
 
