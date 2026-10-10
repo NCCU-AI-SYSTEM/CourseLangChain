@@ -4,12 +4,11 @@ import time
 from warnings import deprecated
 
 from langchain_core.tools import tool
-# ChatOllama(/api/chat),不是 OllamaLLM(/api/generate)。raw completion 沒有 chat
-# template,thinking 模型少了界定思考區塊的結構就停不下來 —— 實測同一個 prompt,
-# OllamaLLM 370 秒未返回,ChatOllama + reasoning=False 21.7 秒、done_reason=stop、
-# 思考區塊 0 字。prompt 裡寫「不要思考過程」擋不住(那是文字指示),num_predict 也
-# 擋不住(只會在思考中途被切斷,回空字串)。
-# (實作在 utils/llm.py 的 get_chat_llm(extract=True))
+# 一定要用 Chat 介面並關掉 thinking(utils/llm.py 的 get_chat_llm(extract=True))。
+# 早期用 Ollama 時實測:raw completion(/api/generate)沒有 chat template,thinking
+# 模型停不下來,370 秒未返回;換成 chat 介面 + 關 thinking 後 21.7 秒、思考 0 字。
+# prompt 裡寫「不要思考過程」擋不住(那是文字指示),輸出上限也擋不住(只會在
+# 思考中途被切斷，回空字串)。
 
 from paths import SQLITE_DEPRECATION_MSG, USE_SQLITE
 from utils.llm import get_chat_llm

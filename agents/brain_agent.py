@@ -207,7 +207,7 @@ def _moodle_prompt(tools: list) -> str:
 
 
 def _get_chat_llm():
-    """Brain Agent 必須使用支援 tool calling 的 Chat 介面（不是 OllamaLLM）。"""
+    """Brain Agent 必須使用支援 tool calling 的 Chat 介面。"""
     return get_chat_llm(temperature=0.3)
 
 
