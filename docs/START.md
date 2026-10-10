@@ -4,7 +4,7 @@
 
 | # | 服務 | Port | 位置 |
 |---|------|------|------|
-| 1 | PostgreSQL | 5433 | 本 repo |
+| 1 | PostgreSQL | 5432 | 本 repo |
 | 2 | Moodle MCP | 3033 | nccu-moodle-mcp repo |
 | 3 | 後端(FastAPI) | 8000 | 本 repo |
 | 4 | 前端(Vite) | 3000 | [CourseLangGraph-frontend](https://github.com/NCCUCourseScheduling/CourseLangGraph-frontend) repo |
@@ -22,7 +22,7 @@ Docker 有開就只要跑一次，之後會一直在背景。
 docker compose up -d postgres
 ```
 
-5432 被別的專案佔用，所以 `.env` 設了 `POSTGRES_PORT=5433`,`DATABASE_URL` 也指向 5433。
+5432 被別的程式佔用時，在 `.env` 設 `POSTGRES_PORT` 換一個 port,`DATABASE_URL` 的 port 也要跟著改。
 
 ## 2. Moodle MCP
 
