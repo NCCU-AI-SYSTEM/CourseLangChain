@@ -120,8 +120,8 @@ uv run python -m tests.test_user_profile
 
 ## 前端
 
-**[CourseLangGraph-frontend](https://github.com/NCCU-AI-System/CourseLangGraph-frontend)**
+**[CourseLangChain-frontend](https://github.com/NCCU-AI-System/CourseLangChain-frontend)**
 
 ## Report
 
-[report]([https://docs.google.com/document/d/1CkelC_x8B_QnVHEiIZisG1d8BJwXoYg02lqaqgbQlFY/edit?usp=sharing](https://docs.google.com/document/d/1hH0jlfn79adLXgyjeiVMhIZCQxVbqo9Zi4HFuDOKfxo/edit?usp=sharing))
+[report](https://docs.google.com/document/d/1hH0jlfn79adLXgyjeiVMhIZCQxVbqo9Zi4HFuDOKfxo/edit?usp=sharing)
