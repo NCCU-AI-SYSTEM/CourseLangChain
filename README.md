@@ -3,9 +3,6 @@
 政大課程查詢 / 排課 agent。這個 repo 只負責**查詢**;課程資料的準備(schema、時間欄位、
 embedding)在另一個 repo [`course-data-prep`](#資料從哪裡來),產出一份 PostgreSQL 成品(`.sql.gz`)給這邊用。
 
-所以一般開發者**不需要 GPU、不需要下載 embedding 模型、也不用碰 course-data-prep** ——
-拿到成品檔就能跑。
-
 ## 需求
 
 - Docker(跑 PostgreSQL)
@@ -31,6 +28,12 @@ CLI 模式:`uv run python main.py`;用 Docker 跑 app:`docker compose --profile 
 > **完整流程看 [docs/SETUP.md](docs/SETUP.md)** —— 資料準備的每一個步驟、各階段怎麼驗證、
 > 以及常見問題(換資料沒生效、容器連不到 LLM、契約不符開不起來…)。
 > 沒有 `.sql.gz` 檔、或要重新產生一個學期的資料,請從那份開始看。
+
+
+# 架構
+
+<img width="984" height="559" alt="image" src="https://github.com/user-attachments/assets/c5ed59e0-442e-4a1b-b03f-e31e3102ca3b" />
+
 
 ## 檢索怎麼做的
 
