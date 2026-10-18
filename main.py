@@ -1,7 +1,5 @@
-import json
 import logging
 import os
-import re
 import uuid
 
 import fire
@@ -12,7 +10,7 @@ from langfuse.langchain import CallbackHandler
 from langchain_core.runnables import RunnableConfig
 
 from agents.brain_agent import brain_agent
-from harness import SafeAgentExecutor, sanitize_input, validate_output
+from harness import SafeAgentExecutor, check_output, sanitize_input
 from paths import check_contract
 from tools.mcp_tools import tool_status as mcp_tool_status
 from tools.retrieve import parse_formatted_docs, retrieve_tool
@@ -22,8 +20,9 @@ load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
 # L1 擋下不安全輸入時回給使用者的訊息
 _REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方式重新提問。"
-# L3 驗證未通過時回給使用者的訊息(寧可不回課表,也不給錯誤課表)
-_INVALID_OUTPUT_MSG = "抱歉,系統產生的課表未通過正確性檢查,請調整條件後再試一次。"
+# L3 驗證未通過、且該驗證器沒有登記自己的訊息時,回給使用者的預設訊息。
+# 各驗證器的專屬訊息(衝堂、課號、prompt 洩漏…)在登記時提供,見 agents/output_checks.py。
+_INVALID_OUTPUT_MSG = "抱歉,這次的回答沒有通過系統檢查,請換個問法再試一次。"
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -92,35 +91,6 @@ def _check_tool_status_keys() -> None:
         )
 
 
-# 模型把工具呼叫寫成文字時的樣子:一個只有 name/arguments 的 JSON 物件。
-# 實測 qwen2:7b 有時完全不使用 tool calling 機制,直接把
-# {"name": "my_schedule_tool", "arguments": {...}} 當成**最終答案**吐出來 ——
-# 那則訊息沒有 tool_calls 可判斷,只能看內容本身。
-#
-# 刻意只認這個特定形狀(頂層 key 不超出 name/arguments/parameters),
-# 而不是「看起來像 JSON 就擋」—— 否則使用者真的要求 JSON 輸出時會被誤殺。
-_FENCE_HEAD = re.compile(r"^\s*(?:```(?:json)?\s*)+")
-_FENCE_TAIL = re.compile(r"(?:\s*```)+\s*$")
-_TOOL_CALL_LEAK_MSG = (
-    "抱歉,這次沒能整理出結果。請換個問法,或把需求說得更具體一點再試一次。"
-)
-
-
-def _is_tool_call_text(content: str) -> bool:
-    text = _FENCE_TAIL.sub("", _FENCE_HEAD.sub("", content)).strip()
-    if not (text.startswith("{") and text.endswith("}")):
-        return False
-    try:
-        obj = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return False
-    return (
-        isinstance(obj, dict)
-        and "name" in obj
-        and set(obj) <= {"name", "arguments", "parameters"}
-    )
-
-
 def _tool_output_text(event: dict) -> str:
     """取 on_tool_end 事件裡的工具回傳文字。
 
@@ -170,12 +140,17 @@ class CourseLangGraph:
         if result["error"]:
             return output  # 已是友善訊息
 
-        # L3:輸出驗證(衝堂等)
-        ok, msg = validate_output(output)
-        if not ok:
-            logger.warning("output rejected by L3: %s", msg)
-            return _INVALID_OUTPUT_MSG
-        return output
+        # L3:輸出驗證 + 改寫(見 agents/output_checks.py 的規則表)
+        return self._apply_l3(output, text)
+
+    @staticmethod
+    def _apply_l3(output: str, user_input: str) -> str:
+        """跑 L3,回可以給使用者看的文字:通過就是(可能被改寫過的)回答,不通過就是說明訊息。"""
+        verdict = check_output(output, context={"user_input": user_input})
+        if verdict.ok:
+            return verdict.output
+        logger.warning("output rejected by L3 [%s]: %s", verdict.failed, verdict.detail)
+        return verdict.user_message or _INVALID_OUTPUT_MSG
 
     async def astream(self, user_input: str, thread_id: str | None = None):
         """逐段產出回覆。
@@ -198,8 +173,9 @@ class CourseLangGraph:
             return
 
         # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
-        # 不套用(會切斷已輸出的 token)。L3 輸出驗證亦因逐 token 串流無法即時套用,
-        # 改在非串流 invoke 路徑把關。
+        # 不套用(會切斷已輸出的 token)。
+        # L3 照樣套用:最終答案是一次送出整段文字(見下方 on_chat_model_end),
+        # 送出前拿得到全文,所以和 invoke 路徑跑同一組驗證器。
         config: RunnableConfig = {
             **self._base_config(thread_id),
             "recursion_limit": self.executor.recursion_limit,
@@ -228,13 +204,8 @@ class CourseLangGraph:
                             for part in content
                         )
                     if content.strip():
-                        if _is_tool_call_text(content):
-                            logger.warning(
-                                "模型把工具呼叫當成最終答案輸出,已攔下不顯示給使用者"
-                            )
-                            yield _TOOL_CALL_LEAK_MSG
-                        else:
-                            yield content
+                        # L3:前端走的是這條路徑,不驗的話使用者看到的回答都沒經過把關
+                        yield self._apply_l3(content, text)
             elif kind == "on_tool_start":
                 # 進度提示。ReAct 在 CPU-only 下一題要數分鐘,中間必須讓使用者
                 # 看得出還在跑;但顯示的是人話,不是工具名。

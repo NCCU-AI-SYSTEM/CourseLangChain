@@ -138,6 +138,11 @@ def _fetch_many(ids: list[str], db_path: str = DATA_DB) -> list[CourseSlot]:
     return [make_course(*found[i]) for i in ids if i in found]
 
 
+def existing_course_ids(ids: list[str], db_path: str = DATA_DB) -> set[str]:
+    """回傳 `ids` 中確實存在於當期(鎖 y/s)的課號。資料庫錯誤照常 raise,由呼叫端決定怎麼處理。"""
+    return {c.course_id for c in _fetch_many(list(dict.fromkeys(ids)), db_path)}
+
+
 @deprecated(SQLITE_DEPRECATION_MSG)
 def _fetch_many_sqlite(ids: list[str], db_path: str):
     placeholders = ",".join("?" for _ in ids)

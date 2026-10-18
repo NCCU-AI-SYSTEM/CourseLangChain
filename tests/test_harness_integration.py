@@ -130,6 +130,52 @@ def test_validate_output_registry() -> None:
     check(validate_output("一般回覆")[0], "一般回覆通過 validate_output")
 
 
+def test_stream_applies_l3() -> None:
+    """前端走 astream。這條路徑以前不跑 L3,使用者看到的回答等於沒經過把關。"""
+    print("[串流路徑(前端預設)也套用 L3]")
+    import asyncio
+
+    from langchain_core.messages import AIMessage
+
+    import main
+    import tools.schedule_tool  # noqa: F401 — 觸發 register_validator
+
+    class _StreamGraph:
+        """假的 graph:只送出一則最終答案(與真的 astream 一樣,一次整段)。"""
+
+        def __init__(self, text: str):
+            self.text = text
+
+        async def astream_events(self, *_args, **_kwargs):
+            yield {"event": "on_chat_model_end", "data": {"output": AIMessage(content=self.text)}}
+
+    def run(text: str) -> list:
+        # 跳過 __init__:那裡會檢查資料庫契約,這組測試只關心 astream 的出口
+        g = object.__new__(main.CourseLangGraph)
+        g.brain_agent = _StreamGraph(text)
+        g.executor = SafeAgentExecutor(_StreamGraph(text))
+
+        async def collect() -> list:
+            return [chunk async for chunk in g.astream("幫我排課", thread_id="t-l3")]
+
+        return asyncio.run(collect())
+
+    conflict_md = (
+        "### 方案 1\n| 課程名稱 | 上課時間 | 授課老師 | 學分 |\n"
+        "|--|--|--|--|\n| 課A | 三234 | 王 | 3 |\n| 課B | 三34 | 李 | 3 |\n"
+    )
+    from agents.output_checks import TOOL_CALL_LEAK_MESSAGE
+
+    out = run(conflict_md)
+    check(
+        len(out) == 1 and "課表未通過正確性檢查" in out[0],
+        f"衝堂課表在串流路徑被攔下,回衝堂專屬訊息(實際:{[str(x)[:20] for x in out]})",
+    )
+    check(run("一般回覆") == ["一般回覆"], "正常回答照常送出")
+    leak = run('{"name": "retrieve_tool", "arguments": {}}')
+    check(leak == [TOOL_CALL_LEAK_MESSAGE], "工具呼叫外洩由 L3 註冊表攔下,回專屬訊息")
+
+
 def test_brain_agent_wiring() -> None:
     print("[brain_agent 接線冒煙測試]")
     try:
@@ -150,6 +196,7 @@ if __name__ == "__main__":
     test_l1_sanitizer()
     test_l3_schedule_validator()
     test_validate_output_registry()
+    test_stream_applies_l3()
     test_brain_agent_wiring()
     print(f"\n結果:{_PASS} passed, {_FAIL} failed")
     raise SystemExit(1 if _FAIL else 0)

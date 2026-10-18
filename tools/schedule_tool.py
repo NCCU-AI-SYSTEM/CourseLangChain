@@ -239,6 +239,10 @@ def _validate_schedule_output(output: str) -> tuple[bool, str]:
 try:  # harness 可能在某些精簡環境未載入,validator 缺席不應讓 import 失敗
     from harness import register_validator
 
-    register_validator("schedule_no_conflict", _validate_schedule_output)
+    register_validator(
+        "schedule_no_conflict",
+        _validate_schedule_output,
+        user_message="抱歉,系統產生的課表未通過正確性檢查,請調整條件後再試一次。",
+    )
 except Exception:  # noqa: BLE001
     pass
