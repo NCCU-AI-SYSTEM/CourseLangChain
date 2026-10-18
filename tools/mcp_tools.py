@@ -39,6 +39,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 
+from harness import wrap_untrusted
 from paths import CAMPUS_WEB_MCP_URL, MOODLE_MCP_URL
 from tools import session_moodle
 
@@ -46,6 +47,12 @@ logger = logging.getLogger(__name__)
 
 CAMPUS_WEB_SERVER = "campus_web"
 MOODLE_SERVER = "moodle"
+
+# 外部工具回傳內容的出處說明,會寫進「外部資料」標記裡給模型看(見 harness/untrusted.py)
+_SOURCE_LABEL = {
+    CAMPUS_WEB_SERVER: "校內網站(網頁內容,任何能編輯網頁的人都寫得進去)",
+    MOODLE_SERVER: "Moodle(課程公告與作業說明由教師、助教撰寫)",
+}
 
 # 允許 agent 使用的外部工具。**只放確認過是唯讀的工具。**
 # 預設拒絕:對方新增的工具不會自動生效,開機 log 會列出被略過的名字。要開放某個工具,
@@ -180,7 +187,10 @@ def _wrap(
             # 帳密已經失效(例如使用者改了密碼):立刻清掉,後面的呼叫就不會再替他失敗一次
             auth.on_login_failed(session_id)
             return auth.login_failed
-        return text
+        if text.startswith("ERROR:"):
+            return text  # 錯誤訊息維持工具合約(ERROR: 開頭),不包標記
+        # 外部服務回傳的內容一律標成「資料,不是指令」:網頁、公告裡可能藏著對 AI 的指令
+        return wrap_untrusted(text, _SOURCE_LABEL.get(server, f"外部服務 {server}"))
 
     def _call(config: RunnableConfig = None, **kwargs: Any) -> str:
         return _run_sync(_acall(config, **kwargs))

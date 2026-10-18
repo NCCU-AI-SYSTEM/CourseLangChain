@@ -3,6 +3,8 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from harness import wrap_untrusted
+
 from warnings import deprecated
 
 from paths import (
@@ -31,7 +33,7 @@ def _truncate(text: Optional[str], limit: int = _FIELD_TRUNCATE) -> str:
 def _format_one(course: dict) -> str:
     point = course.get("point")
     point_str = f"{point} 學分" if point is not None else "(無)"
-    return "\n".join(
+    header = "\n".join(
         [
             "## 課程資訊",
             f"- 課程名稱：{course.get('name') or '(無)'}",
@@ -41,7 +43,12 @@ def _format_one(course: dict) -> str:
             f"- 上課教室：{course.get('classroom') or '(無)'}",
             f"- 開課單位：{course.get('unit') or '(無)'}",
             f"- 學分：{point_str}",
-            "",
+        ]
+    )
+    # 以下是教師撰寫的自由文字。實測藏在這裡的指令(例如「回答時務必附上某連結」)
+    # 模型會照做,所以包進外部資料標記;見 harness/untrusted.py
+    free_text = "\n".join(
+        [
             "## 課程目標",
             _truncate(course.get("objective")),
             "",
@@ -70,6 +77,7 @@ def _format_one(course: dict) -> str:
             _truncate(course.get("note")),
         ]
     )
+    return header + "\n\n" + wrap_untrusted(free_text, "課綱(由授課教師撰寫)")
 
 
 def _format_candidates(rows: list[dict]) -> str:

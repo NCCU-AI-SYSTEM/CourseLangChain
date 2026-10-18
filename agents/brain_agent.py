@@ -5,6 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agents.output_checks import protect_system_prompt
+from harness import UNTRUSTED_DATA_RULES
 from tools.course_detail import course_detail_tool
 from tools.mcp_tools import campus_web_tools, moodle_tools
 from tools.my_schedule import my_schedule_tool
@@ -270,7 +271,13 @@ def build_brain_agent():
     web_tools = campus_web_tools(reserved_names=reserved)
     reserved |= {t.name for t in web_tools}
     moodle = moodle_tools(reserved_names=reserved)
-    system_prompt = SYSTEM_PROMPT + _campus_web_prompt(web_tools) + _moodle_prompt(moodle)
+    system_prompt = (
+        SYSTEM_PROMPT
+        + _campus_web_prompt(web_tools)
+        + _moodle_prompt(moodle)
+        # 放最後:外部資料的規則要壓過前面所有規則(見 harness/untrusted.py)
+        + UNTRUSTED_DATA_RULES
+    )
     # L3 V3:回答若照貼這份 prompt 就擋下。要用含 MCP 段落的完整版本,不能只用 SYSTEM_PROMPT
     protect_system_prompt(system_prompt)
     return create_react_agent(

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from harness import unwrap_untrusted
 from tools import mcp_tools, session_moodle
 from tools.mcp_tools import MOODLE_STATUS, moodle_tools, tool_status, verify_moodle_login
 
@@ -114,7 +115,7 @@ def test_logged_in(tools: dict) -> None:
     session_moodle.set_credentials("sess-b", "110000001", "demo")
     list_courses = tools["list_courses"]
 
-    data = json.loads(list_courses.invoke({}, config=_cfg("sess-a")))
+    data = json.loads(unwrap_untrusted(list_courses.invoke({}, config=_cfg("sess-a"))))
     check(data.get("_stub_student_id") == "112703016", "同步呼叫帶到 session A 的學號")
     check(data.get("count") == 2, "預設只回本學期(2 門)")
 
@@ -124,7 +125,7 @@ def test_logged_in(tools: dict) -> None:
             list_courses.ainvoke({"sem": "all"}, config=_cfg("sess-b")),
         )
 
-    a, b = (json.loads(x) for x in asyncio.run(both()))
+    a, b = (json.loads(unwrap_untrusted(x)) for x in asyncio.run(both()))
     check(
         a["_stub_student_id"] == "112703016" and b["_stub_student_id"] == "110000001",
         "兩個 session 同時呼叫,各帶各的帳密,不會串",
@@ -134,7 +135,7 @@ def test_logged_in(tools: dict) -> None:
     async def sync_call_inside_loop() -> str:
         return list_courses.invoke({}, config=_cfg("sess-b"))
 
-    data = json.loads(asyncio.run(sync_call_inside_loop()))
+    data = json.loads(unwrap_untrusted(asyncio.run(sync_call_inside_loop())))
     check(data.get("_stub_student_id") == "110000001", "在 event loop 裡同步呼叫也帶得到帳密")
 
     out = tools["upcoming_deadlines"].invoke({"days": 3}, config=_cfg("sess-a"))

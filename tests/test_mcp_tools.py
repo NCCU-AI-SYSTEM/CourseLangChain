@@ -77,6 +77,10 @@ def test_load_and_call(url: str) -> list:
     out = asyncio.run(tool.ainvoke({"query": "註冊組在哪裡"}))
     check(isinstance(out, str), f"非同步呼叫回 str(實際 {type(out).__name__})")
     check("來源: https://aca.nccu.edu.tw" in str(out), "回傳含來源網址")
+    check(
+        str(out).startswith("<<外部資料:") and "校內網站" in str(out).splitlines()[0],
+        "網頁內容包進外部資料標記,標記寫明來源(spotlighting)",
+    )
 
     out = tool.invoke({"query": "休學要怎麼辦"})
     check(
@@ -94,7 +98,7 @@ def test_load_and_call(url: str) -> list:
     check("找不到" in out, "查無資料時回白話訊息")
 
     out = tool.invoke({"query": "   "})
-    check(out.startswith("ERROR:"), "server 端回的 ERROR 字串原樣轉交")
+    check(out.startswith("ERROR:"), "server 端回的 ERROR 字串原樣轉交(不包標記,維持工具合約)")
 
     out = tool.invoke({"query": "註冊組", "max_results": "not-a-number"})
     check(
