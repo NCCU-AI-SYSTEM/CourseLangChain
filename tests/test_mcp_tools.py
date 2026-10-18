@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from tools.mcp_tools import CAMPUS_WEB_STATUS, load_mcp_tools, tool_status
+from tools.mcp_tools import CAMPUS_WEB_ALLOWED_TOOLS, CAMPUS_WEB_STATUS, load_mcp_tools, tool_status
 
 _PASS = 0
 _FAIL = 0
@@ -113,6 +113,20 @@ def test_reserved_name(url: str) -> None:
     check(all(t.name != "search_campus_web" for t in tools), "撞名的外部工具被略過")
 
 
+def test_allowlist(url: str) -> None:
+    print("[工具白名單:預設拒絕]")
+    check(
+        load_mcp_tools(url, allowed=frozenset()) == [],
+        "白名單是空的 → 對方提供的工具一個都不收",
+    )
+    names = [t.name for t in load_mcp_tools(url, allowed=frozenset({"search_campus_web"}))]
+    check(names == ["search_campus_web"], f"白名單內的工具照常載入(實際:{names})")
+    check(
+        "search_campus_web" in CAMPUS_WEB_ALLOWED_TOOLS,
+        "校內網站的預設白名單包含 stub 提供的工具(否則上面幾組測試都會是空的)",
+    )
+
+
 def test_prompt(tools: list) -> None:
     print("[prompt 只在有外部工具時才加意圖 E]")
     from agents.brain_agent import _campus_web_prompt
@@ -148,6 +162,7 @@ if __name__ == "__main__":
     try:
         tools = test_load_and_call(url)
         test_reserved_name(url)
+        test_allowlist(url)
         test_prompt(tools)
         test_server_dies_mid_session(url, proc)
     finally:

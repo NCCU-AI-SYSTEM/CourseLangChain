@@ -8,7 +8,7 @@
 `schedule_tool._PLAN_CACHE`(側通道)、LangGraph 注入 `RunnableConfig` 的 thread_id、
 與 `app.py` 共用的 session 課表 —— 搬到別的行程會靜默失效。
 
-包裝時做的三件事:
+包裝時做的五件事:
 1. **外部服務掛了不能拖垮選課功能。** 開機載入失敗 → log 警告、回空清單,agent 照常啟動;
    執行期呼叫失敗 → 回 `"ERROR: ..."` 字串(照 registry.py 的工具合約),不 raise。
 2. **同步橋接。** langchain-mcp-adapters 轉出的工具只有 coroutine,但
@@ -21,6 +21,9 @@
    (= 前端的 session_id),向 `session_moodle` 拿這位使用者的帳密,經 interceptor 塞進這一次呼叫。
    **帳密不是工具參數,模型看不到。** 沒登入就不打 server;對方回登入失敗就清掉帳密、不重試
    (NCCU 連續失敗 5 次會鎖帳號 15 分鐘)。
+5. **工具白名單。** 只收 `*_ALLOWED_TOOLS` 明確列出的工具,其餘一律略過並在 log 列出。
+   對方 server 不是我們維護的,哪天多了一個會寫入的工具,不能讓 agent 自動拿到那個權限
+   (OWASP LLM06 Excessive Agency)。
 """
 from __future__ import annotations
 
@@ -43,6 +46,14 @@ logger = logging.getLogger(__name__)
 
 CAMPUS_WEB_SERVER = "campus_web"
 MOODLE_SERVER = "moodle"
+
+# 允許 agent 使用的外部工具。**只放確認過是唯讀的工具。**
+# 預設拒絕:對方新增的工具不會自動生效,開機 log 會列出被略過的名字。要開放某個工具,
+# 先確認它不會寫入或對外發送任何東西,再加進這裡 —— 這是一次需要 code review 的權限變更,
+# 所以刻意不做成環境變數。
+CAMPUS_WEB_ALLOWED_TOOLS = frozenset({"search_campus_web"})
+# nccu-moodle-mcp 的工具不只這四個,但其他的還沒確認是否唯讀,先不開放
+MOODLE_ALLOWED_TOOLS = frozenset({"list_courses", "upcoming_deadlines", "list_assignments", "get_grades"})
 
 # 前端進度提示。外部工具的名字由對方決定、隨時可能改,所以不放進 main.py 的
 # `_TOOL_STATUS`(那張表開機時會斷言每個 key 都是已註冊的本地工具),改依來源給一句通用的。
@@ -193,6 +204,7 @@ def load_mcp_tools(
     unavailable: str = "ERROR: 校內網站查詢服務暫時無法使用,請稍後再試。",
     timeout: float = _CALL_TIMEOUT_SEC,
     auth: SessionAuth | None = None,
+    allowed: frozenset[str] = CAMPUS_WEB_ALLOWED_TOOLS,
 ) -> list[BaseTool]:
     """連到 `url` 的 MCP server(streamable HTTP)取回工具並包好。**任何失敗都回空清單,不 raise。**
 
@@ -203,6 +215,7 @@ def load_mcp_tools(
         server / status / unavailable / timeout: 這個 server 的名稱、前端進度提示、
             連不上時回給模型的訊息、單次呼叫逾時。
         auth: 要依使用者帶帳密時提供(見 SessionAuth)。
+        allowed: 允許載入的工具名。不在裡面的一律略過(見 `CAMPUS_WEB_ALLOWED_TOOLS`)。
     """
     if not url:
         return []
@@ -235,7 +248,11 @@ def load_mcp_tools(
 
     reserved = set(reserved_names)
     tools: list[BaseTool] = []
+    not_allowed: list[str] = []
     for remote in remote_tools:
+        if remote.name not in allowed:
+            not_allowed.append(remote.name)
+            continue
         if remote.name in reserved:
             logger.error("MCP 工具 %r(%s)與已載入的工具同名,已略過。請對方改名。", remote.name, server)
             continue
@@ -243,6 +260,12 @@ def load_mcp_tools(
             logger.error("MCP 工具 %r 不是預期的 StructuredTool,已略過。", remote.name)
             continue
         tools.append(_wrap(remote, server=server, unavailable=unavailable, auth=auth))
+    if not_allowed:
+        logger.warning(
+            "MCP server %s 提供了不在白名單的工具 %s,已略過。確認是唯讀之後,"
+            "再加進 tools/mcp_tools.py 的白名單。",
+            server, sorted(not_allowed),
+        )
     _status_by_name.update({t.name: status for t in tools})
     logger.info("已載入 MCP server %s 的工具:%s", server, [t.name for t in tools])
     return tools
@@ -298,6 +321,7 @@ def moodle_tools(reserved_names: Iterable[str] = (), url: str | None = None) -> 
         unavailable="ERROR: Moodle 服務暫時無法連線,請稍後再試。",
         timeout=_MOODLE_CALL_TIMEOUT_SEC,
         auth=MOODLE_AUTH,
+        allowed=MOODLE_ALLOWED_TOOLS,
     )
 
 
