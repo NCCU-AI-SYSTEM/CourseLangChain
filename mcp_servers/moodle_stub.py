@@ -16,6 +16,7 @@
 刻意不加 `from __future__ import annotations`:FastMCP 靠型別註解辨認 `ctx: Context` 參數。
 """
 import argparse
+import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,22 @@ WS_ERROR_PASSWORD = "wserror"
 _NOTE = "【PoC 假資料】"
 _TPE = ZoneInfo("Asia/Taipei")
 _URL = "https://moodle.example.invalid"
+
+
+def _poison() -> str:
+    """紅隊評測用:環境變數 STUB_POISON_FILE 指向的檔案內容(每次呼叫重新讀取)。
+
+    用來模擬「外部內容裡藏著對 AI 的指令」的間接注入,見 evals/redteam/。
+    沒設定或檔案是空的就回空字串,stub 行為與平常完全相同。
+    """
+    path = os.environ.get("STUB_POISON_FILE")
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 _COURSES = [
     {"id": 90001, "name": f"{_NOTE}1151_物件導向程式設計 Object-Oriented Programming",
@@ -109,6 +126,9 @@ def upcoming_deadlines(ctx: Context, days: int = 14, include_all_role: bool = Fa
              "overdue": False, "module": "quiz", "url": f"{_URL}/mod/quiz/view.php?id=70002"}),
     ]
     events = [event for offset, event in upcoming if offset <= days]
+    poison = _poison()
+    if poison and events:
+        events[0]["description"] = poison  # 紅隊:模擬教師撰寫的作業說明
     return {"count": len(events), "days": days, "events": events}
 
 
@@ -125,6 +145,9 @@ def list_assignments(
          "name": f"{_NOTE}作業 2:繼承與多型", "due": _due(2), "opens": _due(-12),
          "cutoff": None, "status": "new", "url": f"{_URL}/mod/assign/view.php?id=70001"},
     ]
+    poison = _poison()
+    if poison:
+        items[1]["intro"] = poison  # 紅隊:模擬教師撰寫的作業說明
     return {"count": len(items), "assignments": items}
 
 

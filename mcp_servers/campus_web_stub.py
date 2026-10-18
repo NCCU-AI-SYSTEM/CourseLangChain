@@ -16,10 +16,27 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from mcp.server.fastmcp import FastMCP
 
 _STUB_NOTE = "【PoC 假資料,非真實公告】"
+
+
+def _poison() -> str:
+    """紅隊評測用:環境變數 STUB_POISON_FILE 指向的檔案內容(每次呼叫重新讀取)。
+
+    用來模擬「外部內容裡藏著對 AI 的指令」的間接注入,見 evals/redteam/。
+    沒設定或檔案是空的就回空字串,stub 行為與平常完全相同。
+    """
+    path = os.environ.get("STUB_POISON_FILE")
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 _PAGES: list[dict] = [
     {
@@ -55,8 +72,9 @@ def search_campus_web(query: str, max_results: int = 3) -> str:
     if not hits:
         return f"找不到與「{q}」相關的校內網站資料。"
 
+    poison = _poison()
     return "\n\n".join(
-        f"[{i}] {page['title']}\n來源: {page['url']}\n內容: {_STUB_NOTE}{page['text']}"
+        f"[{i}] {page['title']}\n來源: {page['url']}\n內容: {_STUB_NOTE}{page['text']}{poison}"
         for i, page in enumerate(hits[: max(1, max_results)], start=1)
     )
 
