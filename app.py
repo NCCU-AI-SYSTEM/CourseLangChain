@@ -7,13 +7,13 @@ import json
 import os
 from dotenv import load_dotenv
 
-from tools import session_moodle, session_profile, session_schedule
+from tools import course_info, session_moodle, session_profile, session_schedule
 from tools.mcp_tools import moodle_enabled, verify_moodle_login
 
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
-from paths import check_contract
+from paths import USE_SQLITE, check_contract
 
 load_dotenv(override=True)  # paths.py already did this; kept for direct runs
 
@@ -194,6 +194,31 @@ async def get_terms():
         "terms": session_schedule.available_terms(),
         "current": _current_term(),
     }
+
+
+@app.get("/api/courses/{course_id}")
+async def get_course(course_id: str):
+    """課程詳細資料卡片:名稱、老師、時間、大綱各段落與官方連結。
+
+    資料直接取自資料庫、不經 LLM —— 與候選課卡片同一個原則,課號不讓模型轉述。
+    """
+    course_id = course_id.strip().upper()
+    if not course_info.COURSE_ID.match(course_id):
+        raise HTTPException(
+            status_code=400,
+            detail="課程代碼格式不正確,應為 13 碼(4 碼學期加 9 碼科目代號)",
+        )
+    if USE_SQLITE:
+        raise HTTPException(status_code=501, detail="課程詳細資料只支援 PostgreSQL 資料庫")
+    try:
+        card = await asyncio.to_thread(course_info.fetch_card, course_id)
+    except Exception as e:  # noqa: BLE001 — 資料庫沒開最常見,回可讀訊息而不是 500 堆疊
+        raise HTTPException(
+            status_code=503, detail=f"課程資料庫暫時無法查詢({type(e).__name__})"
+        ) from e
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"找不到課程代碼 {course_id}")
+    return card
 
 
 @app.get("/api/schedule")
