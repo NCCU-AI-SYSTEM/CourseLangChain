@@ -107,6 +107,22 @@ RRF_K = int(os.getenv("RRF_K", "60"))
 RRF_CANDIDATES = int(os.getenv("RRF_CANDIDATES", "50"))
 
 
+# ── Deployment (ops.deploy) ─────────────────────────────────────────────────
+
+# Where releases come from: a course-data-prep release folder (usually its
+# releases/current, rsynced here) or an http(s) URL serving the same three files.
+DEPLOY_SOURCE = os.getenv("DEPLOY_SOURCE", "")
+DEPLOY_STAGE = os.getenv("DEPLOY_STAGE", os.path.join(PROJECT_ROOT, "db", "releases"))
+# psql against the database server; `-d <database>` and ON_ERROR_STOP are appended.
+DEPLOY_PSQL = os.getenv("DEPLOY_PSQL", "docker compose exec -T postgres psql -U postgres")
+# Empty = do not restart (the app then still runs the old contract until restarted by hand).
+# Recreate, not `restart`: compose bind-mounts contract.yaml as a single file, which pins the
+# old inode; ops.deploy replaces the file atomically, so only a recreated container sees it.
+DEPLOY_RESTART_CMD = os.getenv("DEPLOY_RESTART_CMD", "docker compose --profile app up -d --force-recreate app")
+# Empty = skip the health check.
+DEPLOY_HEALTH_URL = os.getenv("DEPLOY_HEALTH_URL", "http://localhost:8000/api/terms")
+
+
 # ── Contract check ───────────────────────────────────────────────────────────
 
 
