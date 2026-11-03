@@ -25,6 +25,10 @@ db/init/*
 !db/init/.gitkeep
 # ops.deploy 的暫存區(下載下來的資料包)
 db/releases/
+# ops.deploy 換 contract.yaml 時留下的檔案
+contract.yaml.prev
+contract.yaml.tmp
+contract.yaml.rollback
 # 【已棄用】USE_SQLITE=true 時的檢索索引
 faiss_index/
 courses.jsonl

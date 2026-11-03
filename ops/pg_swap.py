@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import shlex
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -88,18 +89,23 @@ def ensure_extensions(url: str) -> None:
 
 
 def restore(psql: str, db: str, gz: Path, cwd: str) -> None:
-    """把 data.sql.gz 串流給 psql;任何一行 SQL 出錯就停(ON_ERROR_STOP)。"""
+    """把 data.sql.gz 串流給 psql;任何一行 SQL 出錯就停(ON_ERROR_STOP)。
+
+    stderr 寫到暫存檔而不是 PIPE:NOTICE 多到塞滿 pipe 時,psql 會卡在寫 stderr、
+    我們卡在寫 stdin,整個部署就停住並一直佔著鎖。"""
     cmd = shlex.split(psql) + ["-v", "ON_ERROR_STOP=1", "-q", "-d", db]
-    with gzip.open(gz, "rb") as src, subprocess.Popen(
-            cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as p:
-        try:
-            for block in iter(lambda: src.read(1 << 20), b""):
-                p.stdin.write(block)
-        except BrokenPipeError:
-            pass      # psql 已經因錯誤結束,下面讀 stderr
-        finally:
-            p.stdin.close()
-        err = p.stderr.read().decode("utf-8", "replace")
+    with tempfile.TemporaryFile() as errf:
+        with gzip.open(gz, "rb") as src, subprocess.Popen(
+                cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errf) as p:
+            try:
+                for block in iter(lambda: src.read(1 << 20), b""):
+                    p.stdin.write(block)
+            except BrokenPipeError:
+                pass      # psql 已經因錯誤結束,下面讀 stderr
+            finally:
+                p.stdin.close()
+        errf.seek(0)
+        err = errf.read().decode("utf-8", "replace")
     if p.returncode:
         tail = "\n".join(err.strip().splitlines()[-8:])
         raise SystemExit(f"[deploy] 匯入 {db} 失敗(psql exit {p.returncode}):\n{tail}")
@@ -169,19 +175,57 @@ def deployed_release(url: str) -> str | None:
 
 def _rename(admin, src: str, dst: str, tries: int = 5) -> None:
     with admin.cursor() as cur:
-        for attempt in range(tries):
-            cur.execute(f"ALTER DATABASE {_ident(src)} ALLOW_CONNECTIONS false")
-            cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                        "WHERE datname = %s AND pid <> pg_backend_pid()", (src,))
-            try:
-                cur.execute(f"ALTER DATABASE {_ident(src)} RENAME TO {_ident(dst)}")
-                break
-            except psycopg2.errors.ObjectInUse:
-                if attempt == tries - 1:
-                    cur.execute(f"ALTER DATABASE {_ident(src)} ALLOW_CONNECTIONS true")
-                    raise
-                time.sleep(0.5)
+        try:
+            for attempt in range(tries):
+                cur.execute(f"ALTER DATABASE {_ident(src)} ALLOW_CONNECTIONS false")
+                cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                            "WHERE datname = %s AND pid <> pg_backend_pid()", (src,))
+                try:
+                    cur.execute(f"ALTER DATABASE {_ident(src)} RENAME TO {_ident(dst)}")
+                    break
+                except psycopg2.errors.ObjectInUse:
+                    if attempt == tries - 1:
+                        raise
+                    time.sleep(0.5)
+        except BaseException:
+            # 不論哪裡出錯都不能把資料庫留在不接受連線的狀態
+            if _exists(admin, src):
+                cur.execute(f"ALTER DATABASE {_ident(src)} ALLOW_CONNECTIONS true")
+            raise
         cur.execute(f"ALTER DATABASE {_ident(dst)} ALLOW_CONNECTIONS true")
+
+
+def recover(url: str) -> list[str]:
+    """把上次被中斷的切換整理回一致的狀態,回傳做了什麼。
+
+    改名一次只動一個資料庫,所以中斷後只會落在這幾種狀態之一:
+      - 某個資料庫停在 ALLOW_CONNECTIONS false  → 打開
+      - 線上不見了,prev 還在(swap_in、undo_swap、rollback 中途)→ prev 回線上,old 回 prev
+      - 線上在,prev 不見了,old 還在(swap_in 第一步之後)→ old 回 prev
+    只有 _next 的情況不處理:它可能沒匯入完,下次部署會重建。
+    """
+    db, _, prev, old = names(database_name(url))
+    done = []
+    admin = connect_admin(url)
+    try:
+        with admin.cursor() as cur:
+            cur.execute("SELECT datname FROM pg_database WHERE NOT datallowconn AND datname = ANY(%s)",
+                        (list(names(db)),))
+            for (name,) in cur.fetchall():
+                cur.execute(f"ALTER DATABASE {_ident(name)} ALLOW_CONNECTIONS true")
+                done.append(f"{name} 重新接受連線")
+        if not _exists(admin, db) and _exists(admin, prev):
+            _rename(admin, prev, db)
+            done.append(f"{prev} → {db}")
+            if _exists(admin, old):
+                _rename(admin, old, prev)
+                done.append(f"{old} → {prev}")
+        elif _exists(admin, db) and not _exists(admin, prev) and _exists(admin, old):
+            _rename(admin, old, prev)
+            done.append(f"{old} → {prev}")
+    finally:
+        admin.close()
+    return done
 
 
 def swap_in(url: str) -> None:

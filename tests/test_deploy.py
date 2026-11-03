@@ -50,8 +50,13 @@ CONTRACT = {"schema_version": 9, "embed_model": "BAAI/bge-base-zh-v1.5", "embed_
             "v4_bm25_tokens": "char12"}
 
 
-def _artifact_sql(release_year: str = "114", meta_override: dict | None = None) -> str:
-    meta = {k: str(v) for k, v in CONTRACT.items() if k != "sqlite_embed_model"} | (meta_override or {})
+def contract_for(tag: str) -> dict:
+    """每一版的 contract 都不一樣,回滾時才分得出換回的是哪一份。"""
+    return CONTRACT | {"test_tag": tag}
+
+
+def _artifact_sql(release_year: str = "114", meta_override: dict | None = None, tag: str = "a") -> str:
+    meta = {k: str(v) for k, v in contract_for(tag).items() if k != "sqlite_embed_model"} | (meta_override or {})
     rows = ",\n".join(f"('{k}', '{v}')" for k, v in meta.items())
     return f"""
 CREATE SCHEMA IF NOT EXISTS public;
@@ -67,14 +72,14 @@ INSERT INTO v4.doc VALUES ('1142703834001', '自 然 自然');
 
 
 def make_release(root: Path, name: str = "114-2_20261102-0928", sql: str | None = None,
-                 contract: dict | None = None, corrupt: bool = False) -> Path:
+                 tag: str = "a", corrupt: bool = False) -> Path:
     import yaml
 
     d = root / name
     d.mkdir(parents=True)
     with gzip.open(d / "data.sql.gz", "wt", encoding="utf-8") as f:
-        f.write(sql if sql is not None else _artifact_sql())
-    (d / "contract.yaml").write_text(yaml.safe_dump(contract or CONTRACT, allow_unicode=True), encoding="utf-8")
+        f.write(sql if sql is not None else _artifact_sql(tag=tag))
+    (d / "contract.yaml").write_text(yaml.safe_dump(contract_for(tag), allow_unicode=True), encoding="utf-8")
     files = {}
     for p in (d / "data.sql.gz", d / "contract.yaml"):
         files[p.name] = {"bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
@@ -122,6 +127,11 @@ def test_fetch_and_verify() -> None:
         root, stage = Path(d) / "releases", Path(d) / "stage"
         make_release(root, corrupt=True)
         check(raises(D.fetch, str(root / "current"), stage), "sha256 不符就拒絕")
+    with tempfile.TemporaryDirectory() as d:
+        root, stage = Path(d) / "releases", Path(d) / "stage"
+        make_release(root, name="bad/../x")
+        check(raises(D.fetch, str(root / "current"), stage), "版本名稱帶 / 或 .. 就拒絕(會寫到暫存區外)")
+    check(raises(D.fetch, "http://example.invalid/releases/current", Path(".")), "明文 http 來源不收")
 
 
 def test_swap_contract_file() -> None:
@@ -162,47 +172,124 @@ def _deployed(url: str) -> str | None:
     return S.deployed_release(url)
 
 
+def _cfg(d: Path, url: str, **kw) -> D.Config:
+    base = dict(source=str(d / "releases" / "current"), stage=d / "stage", database_url=url,
+                psql=os.environ["DEPLOY_PSQL"], restart_cmd="", health_url="", contract_path=d / "contract.yaml")
+    return D.Config(**(base | kw))
+
+
+def _tag(path: Path) -> str | None:
+    import yaml
+
+    return (yaml.safe_load(path.read_text()) or {}).get("test_tag")
+
+
+def _admin(url: str, *statements: str) -> None:
+    admin = S.connect_admin(url)
+    try:
+        with admin.cursor() as cur:
+            for st in statements:
+                cur.execute(st)
+    finally:
+        admin.close()
+
+
+def _initdb_live(url: str, d: Path, tag: str) -> None:
+    """模擬 db/init 首次還原出來的線上資料庫:有資料、沒有 deploy_info。"""
+    import yaml
+
+    db = S.database_name(url)
+    _admin(url, f'CREATE DATABASE "{db}"')
+    S.ensure_extensions(url)
+    gz = d / "initdb.sql.gz"
+    with gzip.open(gz, "wt", encoding="utf-8") as f:
+        f.write(_artifact_sql(tag=tag))
+    S.restore(os.environ["DEPLOY_PSQL"], db, gz, cwd=str(d))
+    (d / "contract.yaml").write_text(yaml.safe_dump(contract_for(tag)))
+
+
 def test_deploy_and_rollback() -> None:
     url = _db_test()
     if not url:
         return
-    import yaml
-
     print("[整合:部署、切換、回滾]")
     _cleanup(url)
+    db, nxt, prev, old = S.names(S.database_name(url))
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
-        live_contract = d / "contract.yaml"
-        live_contract.write_text("schema_version: 8\n")
-        cfg = D.Config(source=str(d / "releases" / "current"), stage=d / "stage", database_url=url,
-                       psql=os.environ["DEPLOY_PSQL"], restart_cmd="", health_url="", contract_path=live_contract)
+        (d / "contract.yaml").write_text("schema_version: 8\n")
+        cfg = _cfg(d, url)
 
-        make_release(d / "releases", "114-2_20261102-0928")
+        make_release(d / "releases", "114-2_20261102-0928", tag="a")
         check(D.deploy(cfg) == "deployed", "第一次部署:沒有現行資料庫也能上線")
-        check(_deployed(url) == "114-2_20261102-0928", "deploy_info 記下版本")
+        check(_deployed(url) == "114-2_20261102-0928" and _tag(d / "contract.yaml") == "a", "版本與 contract 都是 a")
         check(D.deploy(cfg) == "up to date", "同一版再跑一次什麼都不做")
+        (d / "contract.yaml").write_text("schema_version: 8\n")
+        check(D.deploy(cfg) == "repaired" and _tag(d / "contract.yaml") == "a",
+              "同一版但 contract.yaml 被改過:依線上資料庫改回")
 
-        make_release(d / "releases", "114-2_20261103-0300")
+        make_release(d / "releases", "114-2_20261103-0300", tag="b")
         check(D.deploy(cfg) == "deployed", "第二版上線")
-        check(_deployed(url) == "114-2_20261103-0300", "現行是第二版")
-        check(S.exists(url, S.names(S.database_name(url))[2]), "舊版留在 _prev")
+        check(_deployed(url) == "114-2_20261103-0300" and _tag(d / "contract.yaml") == "b", "現行是 b")
+        check(S.exists(url, prev), "舊版留在 _prev")
 
-        make_release(d / "releases", "114-2_20261104-0300", sql=_artifact_sql(meta_override={"schema_version": "8"}))
+        make_release(d / "releases", "114-2_20261104-0300",
+                     sql=_artifact_sql(meta_override={"schema_version": "8"}, tag="c"), tag="c")
         check(raises(D.deploy, cfg), "資料包的 schema_meta 和它附的 contract 不符:切換前就停")
-        check(_deployed(url) == "114-2_20261103-0300", "現行版本沒被動到")
+        check(_deployed(url) == "114-2_20261103-0300" and not S.exists(url, nxt), "線上沒動,_next 已刪")
 
-        make_release(d / "releases", "114-2_20261105-0300", sql=_artifact_sql(release_year="113"))
+        make_release(d / "releases", "114-2_20261105-0300", sql=_artifact_sql(release_year="113", tag="d"), tag="d")
         check(raises(D.deploy, cfg), "資料包沒有 contract 學期的課:切換前就停")
 
-        bad_health = D.Config(**{**cfg.__dict__, "health_url": "http://127.0.0.1:9/api/terms", "health_timeout": 3})
-        make_release(d / "releases", "114-2_20261106-0300")
-        check(raises(D.deploy, bad_health), "重啟後健康檢查失敗就回報錯誤")
-        check(_deployed(url) == "114-2_20261103-0300", "並自動回滾到前一版")
-        check(yaml.safe_load(live_contract.read_text())["schema_version"] == 9, "contract.yaml 也還原成前一版的")
-        check(not S.exists(url, S.names(S.database_name(url))[3]), "暫存的 _old 已清掉")
+        make_release(d / "releases", "114-2_20261106-0300", tag="e")
+        check(raises(D.deploy, _cfg(d, url, health_url="http://127.0.0.1:9/api/terms", health_timeout=3)),
+              "重啟後健康檢查失敗就回報錯誤")
+        check(_deployed(url) == "114-2_20261103-0300" and _tag(d / "contract.yaml") == "b",
+              "自動回滾:資料庫和 contract 都回到 b")
+        check(not S.exists(url, old), "暫存的 _old 已清掉")
 
-        D.rollback(cfg)
-        check(_deployed(url) == "114-2_20261102-0928", "手動 rollback 切回更早一版")
+        make_release(d / "releases", "114-2_20261107-0300", tag="f")
+        check(raises(D.deploy, _cfg(d, url, restart_cmd="false")), "重啟指令失敗也算部署失敗")
+        check(_deployed(url) == "114-2_20261103-0300" and _tag(d / "contract.yaml") == "b",
+              "重啟失敗:同樣回滾到 b")
+
+        check(D.rollback(cfg) == "114-2_20261102-0928" and _tag(d / "contract.yaml") == "a",
+              "手動 rollback:切回 a,contract 也是 a")
+        check(raises(D.rollback, _cfg(d, url, health_url="http://127.0.0.1:9/api/terms", health_timeout=3)),
+              "回滾後健康檢查失敗就回報")
+        check(_deployed(url) == "114-2_20261102-0928" and _tag(d / "contract.yaml") == "a", "並換回原本的 a")
+    _cleanup(url)
+
+
+def test_initdb_live_and_recovery() -> None:
+    url = _db_test()
+    if not url:
+        return
+    print("[整合:db/init 來的線上資料庫、中斷修復、無法回滾的情況]")
+    _cleanup(url)
+    db, nxt, prev, old = S.names(S.database_name(url))
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _initdb_live(url, d, tag="init")
+        cfg = _cfg(d, url)
+        check(raises(D.rollback, cfg), "沒有上一版:rollback 在改名前就停")
+        check(S.exists(url, db), "線上還在")
+
+        make_release(d / "releases", "114-2_20261102-0928", tag="a")
+        check(D.deploy(cfg) == "deployed", "從 db/init 的資料庫換到 a")
+        check(S.deploy_info(url, prev).get("release") == D.UNRECORDED, "舊的線上資料庫補記為 (initdb)")
+        check(D.rollback(cfg) == D.UNRECORDED and _tag(d / "contract.yaml") == "init",
+              "回滾到 db/init 那版,contract 換回它當時的")
+
+        # 模擬切換到一半被殺:線上改成 prev 之後、next 改成線上之前
+        D.rollback(cfg)                                   # 回到 a,prev 是 initdb
+        _admin(url, f'ALTER DATABASE "{prev}" RENAME TO "{old}"', f'ALTER DATABASE "{db}" RENAME TO "{prev}"',
+               f'ALTER DATABASE "{prev}" ALLOW_CONNECTIONS false')
+        check(not S.exists(url, db), "(模擬)線上資料庫不見了")
+        check(D.deploy(cfg) == "up to date", "下一次 deploy 先修復再判斷")
+        check(_deployed(url) == "114-2_20261102-0928" and S.deploy_info(url, prev).get("release") == D.UNRECORDED,
+              "修復後線上是 a、上一版是 initdb")
+        check(not S.exists(url, old), "沒有殘留 _old")
     _cleanup(url)
 
 

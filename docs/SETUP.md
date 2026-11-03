@@ -99,11 +99,20 @@ uv run python -m ops.deploy rollback    # 切回上一版
 接著換上新的 `contract.yaml` 並重啟 app。重啟後健康檢查沒過,就自動把資料庫和
 `contract.yaml` 換回去。匯入與檢查期間服務照常;中斷只有改名(約一秒)加上 app 重啟。
 
-`contract.yaml` 由這支程式換,不要手動改。排程範例(選課期間每天、比資料準備晚一小時):
+部署之後,伺服器上的 `contract.yaml` 由這支程式管理:它會和 git 裡的版本不同,
+不要手動改,也不要 `git checkout` 蓋回去。(手動改了的話,下一次 `deploy` 會依線上
+資料庫記錄的 contract 改回並重啟。)`DEPLOY_SOURCE` 只接受本機資料夾或 https 網址。
+
+排程範例(選課期間每天、比資料準備晚一小時)。cron 的 PATH 通常沒有 `uv` 和 `docker`,
+所以寫絕對路徑並補上 PATH:
 
 ```cron
-17 4 * * * cd /path/to/CourseLangChain && uv run python -m ops.deploy deploy >> db/releases/deploy.log 2>&1
+PATH=/usr/local/bin:/usr/bin:/bin:/home/<user>/.local/bin
+17 4 * * * cd /path/to/CourseLangChain && mkdir -p db/releases && uv run python -m ops.deploy deploy >> db/releases/deploy.log 2>&1
 ```
+
+中途被中斷(重開機、Ctrl-C)的切換,下一次 `deploy` 或 `rollback` 開始時會先整理回一致的狀態;
+`status` 只顯示、不修。
 
 檢查資料進去了:
 
