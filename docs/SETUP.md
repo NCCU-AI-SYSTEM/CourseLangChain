@@ -83,9 +83,43 @@ docker compose logs postgres | grep initdb
 `psql -v ON_ERROR_STOP=1`),這邊沒有任何自訂腳本。
 
 > [!IMPORTANT]
-> restore **只在資料庫第一次建立時**發生(容器 initdb 機制)。換 dump 要先
-> `docker compose --profile app down -v` 清掉 volume,否則新檔案不會生效,
-> 而且不會有任何錯誤訊息。(`--profile app` 的理由見 2-4(B)。)
+> restore **只在資料庫第一次建立時**發生(容器 initdb 機制)。之後換新學期的資料包,
+> 不要再放進 `db/init/`,用下面的 `ops.deploy`;放進去不會生效,也不會有任何錯誤訊息。
+
+### 換版:`ops.deploy`
+
+資料庫已經在跑之後,新的資料包用這支換上去:
+
+```sh
+# .env(本機屬性,見 paths.py 的 DEPLOY_*)
+DEPLOY_SOURCE=/srv/course-releases/current      # course-data-prep 的 releases/current,或 http(s) 網址
+# DEPLOY_RESTART_CMD 預設 docker compose --profile app up -d --force-recreate app
+# DEPLOY_HEALTH_URL  預設 http://localhost:8000/api/terms
+
+uv run python -m ops.deploy deploy      # 有新版才換;同一版什麼都不做,可以放排程
+uv run python -m ops.deploy status
+uv run python -m ops.deploy rollback    # 切回上一版
+```
+
+它把新資料包匯入另一個資料庫 `academic_next`,檢查 `schema_meta` 和資料包附的
+`contract.yaml` 一致、有該學期的課,才改名切換(舊的留成 `academic_prev`),
+接著換上新的 `contract.yaml` 並重啟 app。重啟後健康檢查沒過,就自動把資料庫和
+`contract.yaml` 換回去。匯入與檢查期間服務照常;中斷只有改名(約一秒)加上 app 重啟。
+
+部署之後,伺服器上的 `contract.yaml` 由這支程式管理:它會和 git 裡的版本不同,
+不要手動改,也不要 `git checkout` 蓋回去。(手動改了的話,下一次 `deploy` 會依線上
+資料庫記錄的 contract 改回並重啟。)`DEPLOY_SOURCE` 只接受本機資料夾或 https 網址。
+
+排程範例(選課期間每天、比資料準備晚一小時)。cron 的 PATH 通常沒有 `uv` 和 `docker`,
+所以寫絕對路徑並補上 PATH:
+
+```cron
+PATH=/usr/local/bin:/usr/bin:/bin:/home/<user>/.local/bin
+17 4 * * * cd /path/to/CourseLangChain && mkdir -p db/releases && uv run python -m ops.deploy deploy >> db/releases/deploy.log 2>&1
+```
+
+中途被中斷(重開機、Ctrl-C)的切換,下一次 `deploy` 或 `rollback` 開始時會先整理回一致的狀態;
+`status` 只顯示、不修。
 
 檢查資料進去了:
 
