@@ -1,0 +1,476 @@
+{
+  "model": "gemma4:31b-cloud",
+  "baseline_rev": "34d48d3",
+  "current": {
+    "exception_real": {
+      "events": [
+        {
+          "t": 1.2,
+          "data": "系統暫時無法處理您的要求,請稍後再試。"
+        },
+        {
+          "t": 6.9,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 6.9,
+      "ok": true,
+      "reasons": []
+    },
+    "exception_mock": {
+      "events": [
+        {
+          "t": 0.0,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 0.0,
+          "data": "系統暫時無法處理您的要求,請稍後再試。"
+        },
+        {
+          "t": 0.0,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 0.0,
+      "ok": true,
+      "reasons": []
+    },
+    "recursion_real": {
+      "events": [
+        {
+          "t": 1.1,
+          "data": "查詢步驟過多,請把問題拆得更具體一點再試。"
+        },
+        {
+          "t": 6.8,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 6.8,
+      "ok": true,
+      "reasons": []
+    },
+    "timeout_real": {
+      "events": [
+        {
+          "t": 1.0,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 3.0,
+          "data": "處理時間過長,請簡化您的要求後重試。"
+        },
+        {
+          "t": 15.1,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 15.1,
+      "ok": true,
+      "reasons": []
+    },
+    "empty_mock": {
+      "events": [
+        {
+          "t": 0.0,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 0.0,
+          "data": "這次沒能組出回覆,請換個問法再試一次。"
+        },
+        {
+          "t": 0.0,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 0.0,
+      "ok": true,
+      "reasons": []
+    },
+    "json_real": {
+      "events": [
+        {
+          "t": 1.0,
+          "type": "status",
+          "text": "正在解析時間條件…"
+        },
+        {
+          "t": 2.7,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 6.6,
+          "type": "courses",
+          "courses": [
+            {
+              "course_id": "1151070394001",
+              "name": "人工智慧方法與工具",
+              "time": "四D56",
+              "teacher": "陳昭伶",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070394021",
+              "name": "人工智慧方法與工具",
+              "time": "一D56",
+              "teacher": "吳致勳",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006001",
+              "name": "計算思維與人工智慧",
+              "time": "五D567",
+              "teacher": "張家銘",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006011",
+              "name": "計算思維與人工智慧",
+              "time": "四78E",
+              "teacher": "吳怡潔",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151783004001",
+              "name": "人工智慧程式設計",
+              "time": "二D56",
+              "teacher": "紀俊男",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151652816001",
+              "name": "人工智慧與隱私",
+              "time": "一D56",
+              "teacher": "蕭郁溏",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151753797001",
+              "name": "人工智慧與跨域創新",
+              "time": "二D56",
+              "teacher": "劉吉軒",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151703810001",
+              "name": "人工智慧與跨域創新",
+              "time": "二D56",
+              "teacher": "劉吉軒",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151042217001",
+              "name": "AI、性別與勞動",
+              "time": "二78E",
+              "teacher": "陳芙萱",
+              "credits": "3.0"
+            }
+          ]
+        },
+        {
+          "t": 7.5,
+          "data": "| 課程名稱 | 上課時間 | 授課老師 |\n|----------|----------|----------|\n| 人工智慧方法與工具 | 四D56 | 陳昭伶 |\n| 人工智慧方法與工具 | 一D56 | 吳致勳 |\n| 計算思維與人工智慧 | 五D567 | 張家銘 |\n| 計算思維與人工智慧 | 四78E | 吳怡潔 |\n| 人工智慧程式設計 | 二D56 | 紀俊男 |\n| 人工智慧與隱私 | 一D56 | 蕭郁溏 |\n| 人工智慧與隱私 | 一D56 | 蕭郁溏 |\n| 人工智慧與跨域創新 | 二D56 | 劉吉軒 |\n| 人工智慧與跨域創新 | 二D56 | 劉吉軒 |\n| AI、性別與勞動 | 二78E | 陳芙萱 |"
+        },
+        {
+          "t": 16.7,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 16.7,
+      "ok": true,
+      "reasons": []
+    }
+  },
+  "baseline": {
+    "exception_real": {
+      "events": [
+        {
+          "t": 1.2,
+          "data": "抱歉,系統發生錯誤,暫時無法處理您的要求。(OpenAIConnectionError)",
+          "error": "Connection error."
+        },
+        {
+          "t": 7.1,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 7.1,
+      "ok": false,
+      "reasons": [
+        "沒有出現「系統暫時無法處理」",
+        "出現了「Connection error」"
+      ]
+    },
+    "exception_mock": {
+      "events": [
+        {
+          "t": 0.0,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 0.0,
+          "data": "抱歉,系統發生錯誤,暫時無法處理您的要求。(RuntimeError)",
+          "error": "could not connect: postgresql://postgres:secret@db:5432/academic"
+        },
+        {
+          "t": 0.0,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 0.0,
+      "ok": false,
+      "reasons": [
+        "沒有出現「系統暫時無法處理」",
+        "出現了「secret」",
+        "出現了「postgresql://」",
+        "出現了「RuntimeError」"
+      ]
+    },
+    "recursion_real": {
+      "events": [
+        {
+          "t": 0.6,
+          "data": "抱歉,系統發生錯誤,暫時無法處理您的要求。(GraphRecursionError)",
+          "error": "Recursion limit of 2 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.\nFor troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT"
+        },
+        {
+          "t": 6.1,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 6.1,
+      "ok": false,
+      "reasons": [
+        "沒有出現「查詢步驟過多」",
+        "出現了「GraphRecursionError」",
+        "出現了「Recursion limit」"
+      ]
+    },
+    "timeout_real": {
+      "events": [
+        {
+          "t": 1.1,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 5.0,
+          "type": "courses",
+          "courses": [
+            {
+              "course_id": "1151070394001",
+              "name": "人工智慧方法與工具",
+              "time": "四D56",
+              "teacher": "陳昭伶",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070394021",
+              "name": "人工智慧方法與工具",
+              "time": "一D56",
+              "teacher": "吳致勳",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151783006001",
+              "name": "人工智慧實務專題",
+              "time": "未定或彈性",
+              "teacher": "魏綾音",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006011",
+              "name": "計算思維與人工智慧",
+              "time": "四78E",
+              "teacher": "吳怡潔",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006001",
+              "name": "計算思維與人工智慧",
+              "time": "五D567",
+              "teacher": "張家銘",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151781062001",
+              "name": "人工智慧與數位內容",
+              "time": "三234",
+              "teacher": "吳致勳",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151462890001",
+              "name": "人工智慧與數位內容",
+              "time": "三234",
+              "teacher": "吳致勳",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070393001",
+              "name": "計算思維與人工智慧應用導論",
+              "time": "五234",
+              "teacher": "陳昭伶",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070395011",
+              "name": "人工智慧實務專題",
+              "time": "六234",
+              "teacher": "吳怡潔、吳致勳、陳昭伶",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070423001",
+              "name": "人工智慧導論",
+              "time": "未定或彈性",
+              "teacher": "詳備註",
+              "credits": "3.0"
+            }
+          ]
+        },
+        {
+          "t": 5.9,
+          "data": "| 課程名稱 | 上課時間 | 授課老師 |\n|----------|----------|----------|\n| 人工智慧方法與工具 | 四D56 | 陳昭伶 |\n| 人工智慧方法與工具 | 一D56 | 吳致勳 |\n| 人工智慧實務專題 | 未定或彈性 | 魏綾音 |\n| 計算思維與人工智慧 | 四78E | 吳怡潔 |\n| 計算思維與人工智慧 | 五D567 | 張家銘 |\n| 人工智慧與數位內容 | 三234 | 吳致勳 |\n| 人工智慧與數位內容 | 三234 | 吳致勳 |\n| 計算思維與人工智慧應用導論 | 五234 | 陳昭伶 |\n| 人工智慧實務專題 | 六234 | 吳怡潔、吳致勳、陳昭伶 |\n| 人工智慧導論 | 未定或彈性 | 詳備註 |"
+        },
+        {
+          "t": 16.6,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 16.6,
+      "ok": false,
+      "reasons": [
+        "沒有出現「處理時間過長」",
+        "回覆在 5.9s 才送到,超過 5s"
+      ]
+    },
+    "empty_mock": {
+      "events": [
+        {
+          "t": 0.0,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 0.0,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 0.0,
+      "ok": false,
+      "reasons": [
+        "畫面上沒有任何回覆"
+      ]
+    },
+    "json_real": {
+      "events": [
+        {
+          "t": 1.9,
+          "type": "status",
+          "text": "正在解析時間條件…"
+        },
+        {
+          "t": 2.9,
+          "data": "```json\n{\n  \"exclude_times\": [\n    {\n      \"weekday\": 3,\n      \"start_hour\": 0,\n      \"end_hour\": 24\n    }\n  ],\n  \"include_times\": [\n    {\n      \"start_hour\": 13,\n      \"end_hour\": 18\n    }\n  ]\n}\n```"
+        },
+        {
+          "t": 3.7,
+          "type": "status",
+          "text": "正在查詢課程…"
+        },
+        {
+          "t": 7.6,
+          "type": "courses",
+          "courses": [
+            {
+              "course_id": "1151070394001",
+              "name": "人工智慧方法與工具",
+              "time": "四D56",
+              "teacher": "陳昭伶",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151070394021",
+              "name": "人工智慧方法與工具",
+              "time": "一D56",
+              "teacher": "吳致勳",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006001",
+              "name": "計算思維與人工智慧",
+              "time": "五D567",
+              "teacher": "張家銘",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151046006011",
+              "name": "計算思維與人工智慧",
+              "time": "四78E",
+              "teacher": "吳怡潔",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151783004001",
+              "name": "人工智慧程式設計",
+              "time": "二D56",
+              "teacher": "紀俊男",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151652816001",
+              "name": "人工智慧與隱私",
+              "time": "一D56",
+              "teacher": "蕭郁溏",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151753797001",
+              "name": "人工智慧與跨域創新",
+              "time": "二D56",
+              "teacher": "劉吉軒",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151703810001",
+              "name": "人工智慧與跨域創新",
+              "time": "二D56",
+              "teacher": "劉吉軒",
+              "credits": "3.0"
+            },
+            {
+              "course_id": "1151042217001",
+              "name": "AI、性別與勞動",
+              "time": "二78E",
+              "teacher": "陳芙萱",
+              "credits": "3.0"
+            }
+          ]
+        },
+        {
+          "t": 8.6,
+          "data": "| 課程名稱 | 上課時間 | 授課老師 |\n|----------|----------|----------|\n| 人工智慧方法與工具 | 四D56 | 陳昭伶 |\n| 人工智慧方法與工具 | 一D56 | 吳致勳 |\n| 計算思維與人工智慧 | 五D567 | 張家銘 |\n| 計算思維與人工智慧 | 四78E | 吳怡潔 |\n| 人工智慧程式設計 | 二D56 | 紀俊男 |\n| 人工智慧與隱私 | 一D56 | 蕭郁溏 |\n| 人工智慧與隱私 | 一D56 | 蕭郁溏 |\n| 人工智慧與跨域創新 | 二D56 | 劉吉軒 |\n| 人工智慧與跨域創新 | 二D56 | 劉吉軒 |\n| AI、性別與勞動 | 二78E | 陳芙萱 |"
+        },
+        {
+          "t": 16.4,
+          "data": "SPECIAL_END_TOKEN"
+        }
+      ],
+      "elapsed": 16.4,
+      "ok": false,
+      "reasons": [
+        "出現了「\"exclude_times\"」",
+        "出現了「\"include_times\"」",
+        "出現了「```json」"
+      ]
+    }
+  }
+}
