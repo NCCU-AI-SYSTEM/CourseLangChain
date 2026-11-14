@@ -6,6 +6,9 @@
 - 任何 LLM / tool 拋出的 exception 都轉成人類可讀字串,不外漏 stack trace
 - 回傳值固定為 `dict`(`{"output": str, "steps": int, "elapsed_sec": float, "error": Optional[str]}`)
 
+串流路徑(`main.py::CourseLangGraph.astream`)不經過 `run()`,但用同一組訊息與
+`describe_failure()`,保證和這裡一致:逾時、步數超限、例外都轉成友善訊息。
+
 協作者通常不會直接動這個檔案。如果你需要新增監控 / log,在 `_log_*` 函數裡加。
 
 注意:LangGraph 的一個 ReAct 回合 ≈ 2 個 graph superstep(agent 節點 + tool 節點),
@@ -26,6 +29,26 @@ DEFAULT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "8"))
 # 要 ~400s;首次查詢還要再加上載入 embedding 模型的時間。預設取 600s 是因為超時訊息
 # 看起來像系統壞了、不像設定太小,寧可等。雲端模型快很多,可以用環境變數調小。
 DEFAULT_TIMEOUT_SEC = float(os.getenv("AGENT_TIMEOUT_SEC", "600"))
+
+# 給使用者看的失敗訊息。invoke 與 astream 兩條路徑共用,使用者不論走哪條看到的都一樣。
+TIMEOUT_MESSAGE = "處理時間過長,請簡化您的要求後重試。"
+RECURSION_MESSAGE = "查詢步驟過多,請把問題拆得更具體一點再試。"
+ERROR_MESSAGE = "系統暫時無法處理您的要求,請稍後再試。"
+EMPTY_MESSAGE = "這次沒能組出回覆,請換個問法再試一次。"
+
+
+def describe_failure(exc: BaseException) -> tuple[str, str]:
+    """把 agent 執行中的例外轉成 `(給使用者的訊息, 錯誤代碼)`。
+
+    錯誤代碼給 log / telemetry 用;訊息不含例外內容 —— 例外字串可能帶著
+    內部網址、SQL、檔案路徑,不該出現在使用者畫面上。
+    """
+    # GraphRecursionError(步數超限)給「把問題拆小」的建議,而不是一般錯誤
+    if "Recursion" in type(exc).__name__:
+        return RECURSION_MESSAGE, "recursion_limit"
+    if isinstance(exc, TimeoutError):
+        return TIMEOUT_MESSAGE, "timeout"
+    return ERROR_MESSAGE, type(exc).__name__
 
 
 class SafeAgentExecutor:
@@ -82,7 +105,7 @@ class SafeAgentExecutor:
             if worker.is_alive():
                 self._log_timeout(user_input)
                 return {
-                    "output": "處理時間過長,請簡化您的要求後重試。",
+                    "output": TIMEOUT_MESSAGE,
                     "steps": 0,
                     "elapsed_sec": round(time.time() - start, 2),
                     "error": "timeout",
@@ -98,21 +121,13 @@ class SafeAgentExecutor:
             }
         except Exception as e:  # noqa: BLE001
             # GraphRecursionError(步數超限)也走這裡,給友善訊息而非 stack trace
-            name = type(e).__name__
-            if "Recursion" in name:
-                self._log_error(user_input, e)
-                return {
-                    "output": "查詢步驟過多,請把問題拆得更具體一點再試。",
-                    "steps": self.max_steps,
-                    "elapsed_sec": round(time.time() - start, 2),
-                    "error": "recursion_limit",
-                }
             self._log_error(user_input, e)
+            message, code = describe_failure(e)
             return {
-                "output": "系統暫時無法處理您的要求,請稍後再試。",
-                "steps": 0,
+                "output": message,
+                "steps": self.max_steps if code == "recursion_limit" else 0,
                 "elapsed_sec": round(time.time() - start, 2),
-                "error": name,
+                "error": code,
             }
 
     @staticmethod
@@ -128,7 +143,7 @@ class SafeAgentExecutor:
                 # 缺欄位。這裡若退回 str(last),使用者會拿到整個 AIMessage repr
                 # ——連 token 數與 run id 都在裡面。小模型偶爾會這樣收尾。
                 text = content if isinstance(content, str) else str(content)
-                return text.strip() or "這次沒能組出回覆,請換個問法再試一次。"
+                return text.strip() or EMPTY_MESSAGE
         return str(result)
 
     @staticmethod

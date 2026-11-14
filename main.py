@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -10,7 +11,13 @@ from langfuse.langchain import CallbackHandler
 from langchain_core.runnables import RunnableConfig
 
 from agents.brain_agent import brain_agent
-from harness import SafeAgentExecutor, check_output, sanitize_input
+from harness import (
+    EMPTY_MESSAGE,
+    SafeAgentExecutor,
+    check_output,
+    describe_failure,
+    sanitize_input,
+)
 from paths import check_contract
 from tools.mcp_tools import tool_status as mcp_tool_status
 from tools.retrieve import parse_formatted_docs, retrieve_tool
@@ -23,6 +30,10 @@ _REJECT_MSG = "抱歉,您的輸入無法處理,請改用一般的課程查詢方
 # L3 驗證未通過、且該驗證器沒有登記自己的訊息時,回給使用者的預設訊息。
 # 各驗證器的專屬訊息(衝堂、課號、prompt 洩漏…)在登記時提供,見 agents/output_checks.py。
 _INVALID_OUTPUT_MSG = "抱歉,這次的回答沒有通過系統檢查,請換個問法再試一次。"
+
+# create_react_agent 裡「呼叫模型」那個節點的名稱。astream 只把這個節點的輸出當成回答;
+# 開機時 _check_agent_node() 會確認 graph 裡真的有它,LangGraph 改名時才不會靜默失效。
+AGENT_NODE = "agent"
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -91,6 +102,20 @@ def _check_tool_status_keys() -> None:
         )
 
 
+def _check_agent_node(graph) -> None:
+    """確認 graph 有 AGENT_NODE 這個節點。
+
+    astream 只把這個節點的 LLM 輸出當成回答;節點一旦改名,所有回答都會被濾掉,
+    使用者每題都只拿到保底訊息。和 _check_tool_status_keys 一樣,寧可開機就失敗。
+    """
+    nodes = set(graph.get_graph().nodes)
+    if AGENT_NODE not in nodes:
+        raise RuntimeError(
+            f"brain_agent 沒有 {AGENT_NODE!r} 節點(實際:{sorted(nodes)})。"
+            "LangGraph 可能改了 create_react_agent 的節點名,請同步更新 main.py 的 AGENT_NODE。"
+        )
+
+
 def _tool_output_text(event: dict) -> str:
     """取 on_tool_end 事件裡的工具回傳文字。
 
@@ -105,6 +130,7 @@ class CourseLangGraph:
         # 資料成品與 contract.yaml 必須對得上,否則寧可不啟動(memo,每個 process 一次)
         check_contract()
         _check_tool_status_keys()
+        _check_agent_node(brain_agent)
         self.brain_agent = brain_agent
         # L2:把 ReAct graph 包進安全外殼(step / timeout / exception 防護)
         self.executor = SafeAgentExecutor(brain_agent)
@@ -164,6 +190,8 @@ class CourseLangGraph:
             工具輸出、不經 LLM 轉述
           - `{"type": "plans", "plans": [...]}`:排課方案(含每門課的 course_id),
             前端據此提供「一鍵套用整份方案」;方案編號與回覆文字裡的「方案 N」一致
+
+        **永不 raise**(呼叫端取消除外):逾時、步數超限、例外都轉成一則友善的 `str`。
         """
         # L1:輸入清理(串流路徑同樣先擋)
         text, is_safe = sanitize_input(user_input)
@@ -172,8 +200,49 @@ class CourseLangGraph:
             yield _REJECT_MSG
             return
 
-        # L2 的 step 上限沿用 executor 的 recursion_limit;wall-clock timeout 在串流下
-        # 不套用(會切斷已輸出的 token)。
+        # L2:和 invoke 路徑同一組保證 —— 步數上限(recursion_limit)、整體逾時、
+        # 例外轉成友善訊息、沒有答案時給保底訊息。最終答案是一次整段送出(不是逐 token),
+        # 所以逾時不會切斷「已經送到一半」的回答;已送出的側通道事件(進度、候選課程)
+        # 本來就是完整的,保留不影響正確性。
+        #
+        # 逾時只計在「等下一個事件」上,不包住 yield:yield 時呼叫端在做什麼不歸我們管,
+        # 而且在 async generator 裡跨 yield 包 asyncio.timeout,取消可能落在呼叫端那邊。
+        events = self._stream_events(text, thread_id)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.executor.timeout_sec
+        answered = False
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        anext(events), timeout=max(0.0, deadline - loop.time())
+                    )
+                except StopAsyncIteration:
+                    break
+                if isinstance(chunk, str):
+                    answered = True
+                yield chunk
+        except Exception as e:  # noqa: BLE001 — 包含逾時(TimeoutError)與 GraphRecursionError
+            logger.exception("agent stream failed: input=%r", text[:80])
+            message, code = describe_failure(e)
+            logger.warning("agent stream ended with error=%s", code)
+            yield message
+            return
+        finally:
+            await events.aclose()
+
+        if not answered:
+            # 模型最後一輪什麼都沒說(小模型偶爾如此)。invoke 路徑在這種情況也是回這句;
+            # 串流若什麼都不送,前端只會停在進度提示,看起來像當掉。
+            logger.warning("agent stream produced no final answer")
+            yield EMPTY_MESSAGE
+        logger.info("Brain Agent execution completed")
+
+    async def _stream_events(self, text: str, thread_id: str | None):
+        """`astream` 的事件處理:把 LangGraph 事件轉成要送出的 chunk。
+
+        逾時與例外由 `astream` 處理,這裡只管「哪些事件要送、送什麼」。
+        """
         # L3 照樣套用:最終答案是一次送出整段文字(見下方 on_chat_model_end),
         # 送出前拿得到全文,所以和 invoke 路徑跑同一組驗證器。
         config: RunnableConfig = {
@@ -192,9 +261,15 @@ class CourseLangGraph:
                 # 但帶 tool_calls 的那些是過程,不該進畫面 —— 小模型常把工具呼叫
                 # 寫成 ```json {"name": ...} 這種文字,先前會原樣顯示給使用者。
                 #
+                # 也只認 agent 節點的呼叫:工具內部呼叫的 LLM(text_to_sql 產 JSON 條件)
+                # 一樣會發出 on_chat_model_end,而且沒有 tool_calls,不過濾的話
+                # 那段 JSON 會被當成回答的一部分送到畫面上。
+                #
                 # 代價:最終答案不再逐字串流,而是一次到位。在本機(CPU-only,單次
                 # 呼叫以分鐘計)這個取捨划算 —— 等待期間的「還活著」訊號由
                 # on_tool_start 的進度提示與前端計時器負責,不必靠中間文字。
+                if (event.get("metadata") or {}).get("langgraph_node") != AGENT_NODE:
+                    continue
                 msg = (event.get("data") or {}).get("output")
                 if msg is not None and not getattr(msg, "tool_calls", None):
                     content = getattr(msg, "content", "") or ""
@@ -234,7 +309,6 @@ class CourseLangGraph:
                 plans = pop_plans(_tool_output_text(event))
                 if plans:
                     yield {"type": "plans", "plans": plans}
-        logger.info("Brain Agent execution completed")
 
 
 async def main():

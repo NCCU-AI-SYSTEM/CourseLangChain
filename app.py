@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Body, FastAPI, HTTPException
@@ -16,6 +17,20 @@ from langfuse.langchain import CallbackHandler
 from paths import check_contract
 
 load_dotenv(override=True)  # paths.py already did this; kept for direct runs
+
+logger = logging.getLogger(__name__)
+
+
+def _error_event(exc: BaseException) -> str:
+    """把例外轉成 SSE 錯誤事件。
+
+    `error` 欄位只放例外型別 —— 前端會把它顯示成「錯誤詳情」,而例外字串可能帶著
+    資料庫連線字串、SQL、內部網址。完整內容寫進 log,要除錯去 log 看。
+    """
+    logger.error("request failed", exc_info=exc)
+    name = type(exc).__name__
+    msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({name})"
+    return f"data: {json.dumps({'data': msg, 'error': name})}\n\n"
 
 os.environ.setdefault(
     "LANGFUSE_BASE_URL", os.getenv("LANGFUSE_BASE_URL", "http://localhost:3000")
@@ -101,9 +116,8 @@ async def generate_streaming(question: str, session_id: str | None = None):
             if item is _STREAM_DONE:
                 break
             if isinstance(item, Exception):
-                # 用 data 欄位回可讀訊息、error 欄位放原文(前端兩個都會顯示)
-                msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(item).__name__})"
-                yield f"data: {json.dumps({'data': msg, 'error': str(item)})}\n\n"
+                # astream 本身不 raise(L2),走到這裡代表 harness 之外出錯,例如建構 agent 失敗
+                yield _error_event(item)
                 continue
             if not item:
                 continue
@@ -128,9 +142,8 @@ async def generate_non_streaming(question: str, session_id: str | None = None):
     try:
         result = agent.invoke(question, thread_id=session_id)
         yield f"data: {json.dumps({'data': result})}\n\n"
-    except Exception as e:
-        msg = f"抱歉,系統發生錯誤,暫時無法處理您的要求。({type(e).__name__})"
-        yield f"data: {json.dumps({'data': msg, 'error': str(e)})}\n\n"
+    except Exception as e:  # noqa: BLE001
+        yield _error_event(e)
 
     if langfuse_handler:
         get_client().flush()

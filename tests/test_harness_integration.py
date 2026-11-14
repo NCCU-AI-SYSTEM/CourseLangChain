@@ -133,11 +133,6 @@ def test_validate_output_registry() -> None:
 def test_stream_applies_l3() -> None:
     """前端走 astream。這條路徑以前不跑 L3,使用者看到的回答等於沒經過把關。"""
     print("[串流路徑(前端預設)也套用 L3]")
-    import asyncio
-
-    from langchain_core.messages import AIMessage
-
-    import main
     import tools.schedule_tool  # noqa: F401 — 觸發 register_validator
 
     class _StreamGraph:
@@ -147,18 +142,10 @@ def test_stream_applies_l3() -> None:
             self.text = text
 
         async def astream_events(self, *_args, **_kwargs):
-            yield {"event": "on_chat_model_end", "data": {"output": AIMessage(content=self.text)}}
+            yield _model_end(self.text)
 
     def run(text: str) -> list:
-        # 跳過 __init__:那裡會檢查資料庫契約,這組測試只關心 astream 的出口
-        g = object.__new__(main.CourseLangGraph)
-        g.brain_agent = _StreamGraph(text)
-        g.executor = SafeAgentExecutor(_StreamGraph(text))
-
-        async def collect() -> list:
-            return [chunk async for chunk in g.astream("幫我排課", thread_id="t-l3")]
-
-        return asyncio.run(collect())
+        return _collect_stream(_StreamGraph(text))
 
     conflict_md = (
         "### 方案 1\n| 課程名稱 | 上課時間 | 授課老師 | 學分 |\n"
@@ -176,6 +163,94 @@ def test_stream_applies_l3() -> None:
     check(leak == [TOOL_CALL_LEAK_MESSAGE], "工具呼叫外洩由 L3 註冊表攔下,回專屬訊息")
 
 
+# ── 串流路徑的 L2 ────────────────────────────────────────────────────────────
+
+
+def _model_end(text: str, node: str = "agent", tool_calls: list | None = None) -> dict:
+    """模擬 astream_events 的 on_chat_model_end。node 是發出這次 LLM 呼叫的 graph 節點。"""
+    from langchain_core.messages import AIMessage
+
+    msg = AIMessage(content=text, tool_calls=tool_calls or [])
+    return {"event": "on_chat_model_end", "data": {"output": msg}, "metadata": {"langgraph_node": node}}
+
+
+def _collect_stream(graph, timeout_sec: float = 5.0) -> list:
+    """用假 graph 跑 CourseLangGraph.astream,收集所有 chunk。"""
+    import asyncio
+
+    import main
+
+    # 跳過 __init__:那裡會檢查資料庫契約,這組測試只關心 astream 的出口
+    g = object.__new__(main.CourseLangGraph)
+    g.brain_agent = graph
+    g.executor = SafeAgentExecutor(graph, timeout_sec=timeout_sec)
+
+    async def collect() -> list:
+        return [chunk async for chunk in g.astream("幫我排課", thread_id="t-stream")]
+
+    return asyncio.run(collect())
+
+
+class _ScriptGraph:
+    """依序送出事件;遇到 Exception 就 raise,遇到數字就 sleep 那麼多秒。"""
+
+    def __init__(self, *steps):
+        self.steps = steps
+
+    async def astream_events(self, *_args, **_kwargs):
+        import asyncio
+
+        for step in self.steps:
+            if isinstance(step, BaseException):
+                raise step
+            if isinstance(step, (int, float)):
+                await asyncio.sleep(step)
+                continue
+            yield step
+
+
+def test_stream_l2() -> None:
+    """前端走 astream。以前這條路徑沒有 L2:例外原文送到畫面、沒有逾時、沒答案就沉默。"""
+    print("[串流路徑(前端預設)也套用 L2]")
+    from harness import EMPTY_MESSAGE, TIMEOUT_MESSAGE
+    from harness.agent_wrapper import ERROR_MESSAGE, RECURSION_MESSAGE
+
+    status = {"event": "on_tool_start", "name": "text_to_sql_tool"}
+
+    out = _collect_stream(_ScriptGraph(status, RuntimeError("postgresql://postgres:secret@db")))
+    check(out[-1] == ERROR_MESSAGE, f"例外轉成友善訊息,不 raise(實際:{out})")
+    check(all("secret" not in str(c) for c in out), "例外內容(連線字串)不出現在輸出")
+    check(out[0] == {"type": "status", "text": "正在解析時間條件…"}, "例外之前的進度事件照常送出")
+
+    class GraphRecursionError(Exception):
+        pass
+
+    out = _collect_stream(_ScriptGraph(GraphRecursionError("limit")))
+    check(out == [RECURSION_MESSAGE], f"步數超限給「拆小問題」的訊息(實際:{out})")
+
+    out = _collect_stream(_ScriptGraph(status, 1.0, _model_end("太晚了")), timeout_sec=0.2)
+    check(out[-1] == TIMEOUT_MESSAGE and "太晚了" not in out, f"超過整體逾時回逾時訊息(實際:{out})")
+
+    out = _collect_stream(_ScriptGraph(status, _model_end("   ")))
+    check(out[-1] == EMPTY_MESSAGE, f"模型最後沒說話時給保底訊息,不沉默(實際:{out})")
+
+    out = _collect_stream(_ScriptGraph(
+        _model_end("", tool_calls=[{"name": "text_to_sql_tool", "args": {}, "id": "c1"}]),
+        _model_end('{"weekdays_exclude": ["三"]}', node="tools"),  # text_to_sql 內部的 LLM
+        _model_end("這是最終答案"),
+    ))
+    check(out == ["這是最終答案"], f"工具內部 LLM 的輸出不被當成回答(實際:{out})")
+
+
+def test_describe_failure() -> None:
+    print("[describe_failure:invoke 與 astream 共用]")
+    from harness import TIMEOUT_MESSAGE, describe_failure
+
+    msg, code = describe_failure(ValueError("SELECT * FROM secret"))
+    check(code == "ValueError" and "secret" not in msg, "一般例外:代碼是型別名,訊息不含例外內容")
+    check(describe_failure(TimeoutError()) == (TIMEOUT_MESSAGE, "timeout"), "TimeoutError → 逾時訊息")
+
+
 def test_brain_agent_wiring() -> None:
     print("[brain_agent 接線冒煙測試]")
     try:
@@ -185,6 +260,11 @@ def test_brain_agent_wiring() -> None:
         names = {getattr(t, "name", "") for t in all_tools()}
         check({"retrieve_tool", "schedule_tool"} <= names, "排課兩 tool 在 registry")
         check(brain_agent is not None, "brain_agent 建構成功(含全部已註冊 tool)")
+
+        import main
+
+        main._check_agent_node(brain_agent)
+        check(True, f"brain_agent 有 {main.AGENT_NODE!r} 節點(astream 靠它辨識最終答案)")
     except Exception as e:  # noqa: BLE001
         check(False, f"brain_agent import/建構失敗:{type(e).__name__}: {e}")
 
@@ -197,6 +277,8 @@ if __name__ == "__main__":
     test_l3_schedule_validator()
     test_validate_output_registry()
     test_stream_applies_l3()
+    test_stream_l2()
+    test_describe_failure()
     test_brain_agent_wiring()
     print(f"\n結果:{_PASS} passed, {_FAIL} failed")
     raise SystemExit(1 if _FAIL else 0)

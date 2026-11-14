@@ -10,7 +10,13 @@
 `tools/<your_tool>.py` 內 import `register_validator` 來掛 L3 檢查。
 """
 
-from .agent_wrapper import SafeAgentExecutor, run_agent
+from .agent_wrapper import (
+    EMPTY_MESSAGE,
+    TIMEOUT_MESSAGE,
+    SafeAgentExecutor,
+    describe_failure,
+    run_agent,
+)
 from .errors import HarnessError, OutputValidationError, SanitizationError
 from .input_sanitizer import sanitize_input
 from .untrusted import UNTRUSTED_DATA_RULES, looks_like_directive, unwrap_untrusted, wrap_untrusted
@@ -26,6 +32,9 @@ from .output_validator import (
 __all__ = [
     "SafeAgentExecutor",
     "run_agent",
+    "describe_failure",
+    "TIMEOUT_MESSAGE",
+    "EMPTY_MESSAGE",
     "HarnessError",
     "SanitizationError",
     "OutputValidationError",
