@@ -2,7 +2,7 @@
 
 跑:`.venv/bin/python -m tests.test_regression_fixes`(在 CourseLangChain/ 下)
 沿用專案既有的 standalone 風格(自帶 check + 報表,不依賴 pytest)。
-碰 data.db 的測試在資料庫缺席時會跳過(SKIP)而非 FAIL。
+碰資料庫的測試在 PostgreSQL 連不上時會跳過(SKIP)而非 FAIL。
 
 對應修正:
 1. utils/time.getSessionArray —— 未知字元不再 crash、無幻影節次
@@ -12,11 +12,10 @@
 """
 from __future__ import annotations
 
-import os
 import re
-import sqlite3
 
-from paths import COURSE_SEMESTER, COURSE_YEAR, DATA_DB
+from paths import COURSE_SEMESTER, COURSE_YEAR
+from tests._helpers import DB_SKIP_REASON, db_available
 
 _PASS = 0
 _FAIL = 0
@@ -40,10 +39,6 @@ def skip(msg: str) -> None:
     global _SKIP
     _SKIP += 1
     print(f"  ⊘ SKIP: {msg}")
-
-
-def _has_db() -> bool:
-    return os.path.exists(DATA_DB)
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +87,8 @@ def test_time_parse_robust() -> None:
 # ---------------------------------------------------------------------------
 def test_course_detail_semester_lock() -> None:
     print("[Bug2 course_detail 鎖學期]")
-    if not _has_db():
-        skip("找不到 data.db,略過")
+    if not db_available():
+        skip(DB_SKIP_REASON)
         return
     from tools.course_detail import course_detail_tool
 
@@ -101,7 +96,7 @@ def test_course_detail_semester_lock() -> None:
     out = course_detail_tool.invoke({"course_name": "管理學"})
     ids = re.findall(r"id=(\d{13})", out) + re.findall(r"課程編號：(\d{13})", out)
     if not ids:
-        skip("當前學期查無『管理學』候選(資料可能非 114/2),略過")
+        skip("當前學期查無『管理學』候選(當期資料可能沒有這類課),略過")
         return
     check(
         all(i.startswith(SEM_PREFIX) for i in ids),
@@ -118,23 +113,32 @@ def test_course_detail_semester_lock() -> None:
 # ---------------------------------------------------------------------------
 def test_query_courses_sql_filter() -> None:
     print("[Bug3 query_courses:鎖學期 + 中文斷詞]")
-    if not _has_db():
-        skip("找不到 data.db,略過")
+    if not db_available():
+        skip(DB_SKIP_REASON)
         return
-    from tools.query_courses import query_courses_tool
+    from tools.constraints import constraints_to_where, parse_timefilter_from_json
+    from tools.retrieve import retrieve_tool
 
-    flt = "time GLOB '*三*'"  # 只跑 sql_filter 路徑(純 BM25,不載 pickle)
+    # 用 text_to_sql 實際會產出的格式(JSON 條件 → constraints_to_where)。
+    # 以前寫死 SQLite 的 `time GLOB '*三*'`,換到 PostgreSQL 後每次都是語法錯誤,
+    # 而 ERROR 被當成「查無結果」略過 —— 這條回歸測試從換資料庫起就沒有真正跑過。
+    flt = constraints_to_where(parse_timefilter_from_json(
+        '{"include_times": [{"weekday": 3, "start_hour": 0, "end_hour": 24}]}'
+    ))
 
-    def ids_for(kw: str) -> list[str]:
-        out = query_courses_tool.invoke(
-            {"keyword": kw, "sql_filter": flt, "top_k": 5}
-        )
+    def ids_for(kw: str) -> list[str] | None:
+        out = retrieve_tool.invoke({"keyword": kw, "sql_filter": flt, "top_k": 5})
+        if out.startswith("ERROR"):
+            check(False, f"sql_filter 路徑回 ERROR(關鍵字「{kw}」):{out[:120]}")
+            return None
         return re.findall(r"course_id: (\d{13})", out)
 
     mgmt = ids_for("管理")
     quantum = ids_for("量子")
+    if mgmt is None or quantum is None:
+        return
     if not mgmt or not quantum:
-        skip("sql_filter 路徑查無結果(資料可能非 114/2),略過")
+        skip("sql_filter 路徑查無結果(當期資料可能沒有這類課),略過")
         return
 
     # 鎖學期:全部屬當前學期

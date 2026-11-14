@@ -10,6 +10,7 @@ from __future__ import annotations
 import psycopg2
 
 from paths import COURSE_SEMESTER, COURSE_YEAR, DATABASE_URL
+from tests._helpers import DB_SKIP_REASON, db_available
 from tools import session_schedule as store
 
 _PASS = 0
@@ -107,8 +108,10 @@ def _pick_same_name_pair() -> tuple[str, str]:
 
 
 SID = "test-session-schedule"
-A, B, C = _pick_courses()
-D1, D2 = _pick_same_name_pair()
+# 測試用課程要從真實資料庫挑;連不上就整個檔略過(見 __main__),不在 import 時就崩潰
+if db_available():
+    A, B, C = _pick_courses()
+    D1, D2 = _pick_same_name_pair()
 
 
 def test_add_and_view() -> None:
@@ -285,6 +288,10 @@ def test_credits_and_payload() -> None:
 
 
 if __name__ == "__main__":
+    if not db_available():
+        print(f"  ⊘ SKIP: {DB_SKIP_REASON}整個檔(所有案例都要用真實課程)")
+        print("\n結果:0 passed, 0 failed, 1 skipped")
+        raise SystemExit(0)
     print(
         f"(測試用課程:A={A} B={B}(與A同時段) C={C}(與A不衝堂)"
         f" D1={D1} D2={D2}(與D1同名、星期不重疊))\n"

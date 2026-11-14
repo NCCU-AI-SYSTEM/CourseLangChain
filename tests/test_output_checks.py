@@ -12,6 +12,7 @@ from harness import check_output, current_context
 from harness import output_validator as ov
 from agents import output_checks as oc
 from agents.brain_agent import SYSTEM_PROMPT
+from tests._helpers import DB_SKIP_REASON, db_available
 
 _PASS = 0
 _FAIL = 0
@@ -83,8 +84,13 @@ def _real_course_id() -> str | None:
 
 def test_v2_course_ids() -> None:
     print("[V2 課號落地]")
-    ok, msg = oc.check_course_ids(f"推薦你修課號 {FAKE_ID} 的課,它沒有衝堂。")
-    check(not ok and FAKE_ID in msg, "編造的課號被擋下")
+    # V2 要查資料庫才知道課號存不存在;資料庫連不上時它依設計放行(見下方最後一個案例),
+    # 這時「編造的課號被擋下」驗證不了,要略過而不是報失敗。
+    if db_available():
+        ok, msg = oc.check_course_ids(f"推薦你修課號 {FAKE_ID} 的課,它沒有衝堂。")
+        check(not ok and FAKE_ID in msg, "編造的課號被擋下")
+    else:
+        skip(f"{DB_SKIP_REASON}「編造的課號被擋下」")
 
     v = check_output(f"課號 {FAKE_ID} 在本學期查無此課。", context={"user_input": f"{FAKE_ID} 是什麼課"})
     check(v.ok, "使用者自己輸入的課號,回答覆述「查無此課」不算編造")
@@ -201,8 +207,16 @@ def test_v5_tool_call_leak() -> None:
 
 def test_pipeline() -> None:
     print("[L3 管線:順序、例外、context]")
-    v = check_output(f"課號 {FAKE_ID} 請看 [這裡](https://evil.example/)")
-    check(not v.ok and v.failed == "course_id_grounding", "驗證失敗時直接拒絕,不跑改寫器")
+    # 用必定失敗的臨時驗證器,不借用 V2(V2 要資料庫,沒開時會放行)
+    ov._VALIDATORS["_test_reject"] = ov._Entry(lambda _out: (False, "no"), None)
+    try:
+        v = check_output("請看 [這裡](https://evil.example/)")
+        check(
+            not v.ok and v.failed == "_test_reject" and "evil.example" in v.output,
+            "驗證失敗時直接拒絕,不跑改寫器",
+        )
+    finally:
+        del ov._VALIDATORS["_test_reject"]
 
     def boom(_out: str):
         raise RuntimeError("bug")

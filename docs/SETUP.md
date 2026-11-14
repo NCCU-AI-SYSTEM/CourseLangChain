@@ -169,13 +169,15 @@ curl -s --get --data-urlencode "question=我想學怎麼寫程式，推薦一門
 跑測試(不依賴 pytest;**要用 `-m`**,直接跑檔案路徑會 `ModuleNotFoundError`):
 
 ```sh
-uv run python -m tests.test_contract
-uv run python -m tests.test_scheduler
-uv run python -m tests.test_regression_fixes
-uv run python -m tests.test_user_profile
-uv run python -m tests.test_schedule_tool
-uv run python -m tests.test_harness_integration
+uv run python -m tests                  # 全部,最後印總計
+uv run python -m tests scheduler        # 只跑檔名含 scheduler 的
+uv run python -m tests --require-db     # 連不上資料庫就算失敗(本機完整驗證用)
+uv run python -m tests.test_scheduler   # 單一個檔
 ```
+
+需要 PostgreSQL 的測試在資料庫沒開時會標成略過(⊘ SKIP),不是失敗。CI(`.github/workflows/tests.yml`)
+沒有資料庫,所以那些測試只在本機跑得到 —— 動到檢索、課表、課號驗證時記得加 `--require-db` 跑一次。
+不要用 pytest 跑:檔名雖然是 `test_*.py`,但它們是獨立腳本,pytest 會誤把參數當成 fixture。
 
 ## 2-6.(可選)開啟 Langfuse 追蹤
 

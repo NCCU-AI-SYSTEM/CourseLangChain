@@ -309,8 +309,13 @@ def test_tool_missing_file() -> None:
 
 def test_tool_happy_and_privacy() -> None:
     print("[user_profile_tool 正常讀檔 + 隱私]")
+    import tools.user_profile as up
     from tools.user_profile import user_profile_tool
 
+    # 工具的「當期」來自 contract.yaml,會隨學期換;假成績單固定在 1142。
+    # 不固定的話,contract 一換學期,「本學期已選」那幾項就會失敗。
+    original_term = up.CURRENT_TERM
+    up.CURRENT_TERM = "1142"
     fd, path = tempfile.mkstemp(suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -318,6 +323,7 @@ def test_tool_happy_and_privacy() -> None:
         out = user_profile_tool.invoke({"record_path": path})
     finally:
         os.remove(path)
+        up.CURRENT_TERM = original_term
 
     check("機器學習概論" in out and "演算法" in out, "輸出含已修課")
     check("資料庫系統" in out, "輸出含本學期已選")

@@ -1,0 +1,31 @@
+# 確定性測試(tests/)。紅隊評測(evals/)要呼叫真的 LLM,不在這裡跑。
+#
+# CI 沒有 PostgreSQL:資料成品 data.sql.gz 不進 git(太大且隨學期更新)。
+# 需要資料庫的測試會標成略過(見 tests/_helpers.py),總計那行會列出略過幾項;
+# 動到檢索、課表、課號驗證時,記得在本機開資料庫跑 `uv run python -m tests --require-db`。
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # 程式在 import 時就會建 ChatOpenAI,要有值;測試不會真的呼叫 LLM
+      OPENAI_API_KEY: ci-dummy
+      OPENAI_MODEL: ci-dummy
+      # 指向不存在的位址,讓資料庫偵測馬上失敗,而不是等預設的 localhost:5432
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:1/ci
+      # 測試不該下載 embedding 模型;真的需要時會失敗,而不是在 CI 裡默默下載幾百 MB
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --frozen
+      - run: uv run python -m tests

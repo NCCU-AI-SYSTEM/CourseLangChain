@@ -19,6 +19,7 @@ from tools.scheduler import (
 
 _PASS = 0
 _FAIL = 0
+_SKIP = 0
 
 
 def check(cond: bool, msg: str) -> None:
@@ -132,7 +133,9 @@ def test_on_real_db() -> None:
     # 注意不能只看檔案在不在:sqlite3.connect() 對不存在的路徑會「建一個空檔」,
     # 跑過一次失敗的測試之後就會留下 0 byte 的 data.db,下次就變成 no such table。
     if not _has_course_table("data.db"):
-        print("    (略過:沒有可用的 data.db —— 由 course-data-prep 產生,且 SQLite 路徑已棄用)")
+        global _SKIP
+        _SKIP += 1
+        print("  ⊘ SKIP: 沒有可用的 data.db —— 由 course-data-prep 產生,且 SQLite 路徑已棄用")
         return
     try:
         conn = sqlite3.connect("data.db")
@@ -163,5 +166,5 @@ if __name__ == "__main__":
     test_solver()
     test_exclude_undefined_and_dedup()
     test_on_real_db()
-    print(f"\n結果:{_PASS} passed, {_FAIL} failed")
+    print(f"\n結果:{_PASS} passed, {_FAIL} failed, {_SKIP} skipped")
     raise SystemExit(1 if _FAIL else 0)
