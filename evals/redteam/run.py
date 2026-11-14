@@ -41,8 +41,8 @@ import yaml  # noqa: E402
 SPLITS = ("design", "holdout", "holdout2", "benign")
 SPLIT_LABEL = {
     "design": "設計集(設計防禦時參考過)",
-    "holdout": "保留集(第 3 段前寫好)",
-    "holdout2": "保留集 2(第 4 段新增)",
+    "holdout": "保留集(外部內容標記設計前寫好)",
+    "holdout2": "保留集 2(防禦定案後新增)",
     "benign": "正常問題",
 }
 
