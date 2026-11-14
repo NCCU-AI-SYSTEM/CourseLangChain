@@ -1,21 +1,43 @@
 import json as json_mod
+import logging
+import time
 from warnings import deprecated
 
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import OllamaLLM
+# 一定要用 Chat 介面並關掉 thinking(utils/llm.py 的 get_chat_llm(extract=True))。
+# 早期用 Ollama 時實測:raw completion(/api/generate)沒有 chat template,thinking
+# 模型停不下來,370 秒未返回;換成 chat 介面 + 關 thinking 後 21.7 秒、思考 0 字。
+# prompt 裡寫「不要思考過程」擋不住(那是文字指示),輸出上限也擋不住(只會在
+# 思考中途被切斷，回空字串)。
 
-from paths import (
-    GOOGLE_API_KEY,
-    MODEL,
-    OLLAMA_HOST,
-    SQLITE_DEPRECATION_MSG,
-    USE_GOOGLE_AI,
-    USE_SQLITE,
-)
+from paths import SQLITE_DEPRECATION_MSG, USE_SQLITE
+from utils.llm import get_chat_llm
 from tools.constraints import constraints_to_where, parse_timefilter_from_json
 from .registry import register_tool
 
+
+logger = logging.getLogger(__name__)
+
+
+def _invoke_logged(llm, prompt: str, path: str) -> str:
+    """呼叫 LLM 並把原始回應記下來。
+
+    invoke() 要等整串聚合完才返回,模型不停它就不返回 —— 一旦卡住,原本連
+    「送出了什麼、收回什麼」都看不到。這裡把兩端都記進 log。
+    """
+    kind = type(llm).__name__
+    logger.info("[%s] %s 送出 prompt(%d 字)", path, kind, len(prompt))
+    start = time.time()
+    try:
+        result = llm.invoke(prompt)
+    except Exception:
+        logger.exception("[%s] %s 呼叫失敗,已等 %.1fs", path, kind, time.time() - start)
+        raise
+    elapsed = time.time() - start
+    text = result.content if hasattr(result, "content") else str(result)
+    text = text.strip()
+    logger.info("[%s] %s 回應 %.1fs,%d 字:%r", path, kind, elapsed, len(text), text[:400])
+    return text
 
 
 def _is_json(s: str) -> bool:
@@ -66,14 +88,10 @@ def _sqlite_glob_path(user_input: str) -> str:
     PostgreSQL 路徑改成先產結構化 JSON 再轉 WHERE(_pg_json_path + constraints.py),
     那條路好得多 —— 新功能請只做在那邊。
     """
-    if USE_GOOGLE_AI:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.3,
-            google_api_key=GOOGLE_API_KEY,
-        )
-    else:
-        llm = OllamaLLM(model=MODEL, base_url=OLLAMA_HOST)
+    # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+    # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
+    # extract=True 關掉 thinking 並把輸出上限設 512(保險絲,不是修法)。
+    llm = get_chat_llm(temperature=0, extract=True)
 
     prompt = f"""你是 SQL Agent，專門將時間限制轉換為 SQL WHERE 子句。
 
@@ -97,21 +115,14 @@ time 欄位格式說明：
 直接回一行 SQL 條件,例如：NOT (time GLOB '*三*')
 """
 
-    result = llm.invoke(prompt)
-    if hasattr(result, "content"):
-        return result.content.strip()
-    return str(result).strip()
+    return _invoke_logged(llm, prompt, "sqlite_glob")
 
 
 def _pg_json_path(user_input: str) -> str:
-    if USE_GOOGLE_AI:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.3,
-            google_api_key=GOOGLE_API_KEY,
-        )
-    else:
-        llm = OllamaLLM(model=MODEL, base_url=OLLAMA_HOST)
+    # temperature=0:這是抽取任務,不是創作。用預設的 0.8 同一個問句會給出
+    # 不同答案 —— 實測「晚上的課」一次回 include_times 正確、一次回空陣列。
+    # extract=True 關掉 thinking 並把輸出上限設 512(保險絲,不是修法)。
+    llm = get_chat_llm(temperature=0, extract=True)
 
     prompt = f"""你是課程查詢 Agent，將使用者的時間/課程限制轉換成結構化 JSON。
 
@@ -119,8 +130,12 @@ def _pg_json_path(user_input: str) -> str:
 {{
   "include_times": [{{"weekday": int(1-7), "start_hour": int, "end_hour": int}}],
   "exclude_times": [{{"weekday": int(1-7), "start_hour": int, "end_hour": int}}],
-  "lang": "中文" or "英文",
-  "kind": int(1=必修, 2=選修, 3=通識, 4=體育),
+  "lang": 授課語言,只能填下列其中一個,不要自創:
+        中文 英文 日文 德文 韓文 土耳其文 阿拉伯文
+        西班牙文 法文 俄文 泰文 越南文 印尼文 其他
+      (外語學院與日研、亞際等系所會用該語言開專業課,例如「國際關係理論」是日文授課、
+       「韓國地理」是韓文授課 —— 不是只有語言課才會有中文以外的值)
+  "kind": int(1=必修, 2=選修, 3=通識, 4=體育;不確定就整個不要填),
   "point_min": float,
   "point_max": float,
   "unit": str(開課單位關鍵字)
@@ -128,21 +143,39 @@ def _pg_json_path(user_input: str) -> str:
 
 時間編碼(僅用於理解使用者輸入)：
 - 星期：一二三四五六日 → 1-7
-- 節次：A,B(早),1,2,3,4(上午),C,D(中午),5,6,7,8(下午),E,F,G,H(晚上)
-- start_hour/end_hour 用 24 小時制整數
+- 節次對照(start_hour/end_hour 用 24 小時制整數)：
+    A=6~7   B=7~8
+    1=8~9   2=9~10   3=10~11  4=11~12
+    C=12~13 D=13~14
+    5=14~15 6=15~16  7=16~17  8=17~18
+    E=18~19 F=19~20  G=20~21  H=21~22
+  例：三234 = 星期三 10~12 之間？不是 —— 2,3,4 是 9~10、10~11、11~12,合起來 9~12。
+
+時段請「原封不動」用下面的邊界,不要自己推算：
+- 早上 / 上午 → start_hour 8,  end_hour 12
+- 中午        → start_hour 12, end_hour 13
+- 下午        → start_hour 13, end_hour 18
+- 晚上        → start_hour 18, end_hour 22
+
+使用者只講時段、沒有指定星期幾時,**不要列舉星期**,直接省略 weekday 欄位。
+列舉星期會讓查詢慢很多,而且語意不同。
 
 範例：
 - "不要星期三" → {{"exclude_times": [{{"weekday": 3, "start_hour": 0, "end_hour": 24}}]}}
+- "只能上早上的課" → {{"include_times": [{{"start_hour": 8, "end_hour": 12}}]}}
+- "我想上下午的課" → {{"include_times": [{{"start_hour": 13, "end_hour": 18}}]}}
 - "英文授課,3學分以上" → {{"lang": "英文", "point_min": 3}}
 - "不要星期三下午,選修" → {{"exclude_times": [{{"weekday": 3, "start_hour": 13, "end_hour": 18}}], "kind": 2}}
 
 用戶限制：{user_input}
 
+使用者沒提到的欄位一律不要填,連空值也不要 —— 只寫真正被要求的那幾個。
+(例:「3學分以上」只給 point_min,不要自己補 point_max。)
+
 只輸出 JSON，不要任何其他文字。
 """
 
-    result = llm.invoke(prompt)
-    text = result.content.strip() if hasattr(result, "content") else str(result).strip()
+    text = _invoke_logged(llm, prompt, "pg_json")
     text = text.removeprefix("```json").removesuffix("```").strip()
     try:
         tf = parse_timefilter_from_json(text)

@@ -1,25 +1,20 @@
-# CourseLangGraph
-
-[![](https://dcbadge.vercel.app/api/server/n8w5qE4xyA)](https://discord.gg/n8w5qE4xyA)
+# CourseLangChain
 
 政大課程查詢 / 排課 agent。這個 repo 只負責**查詢**;課程資料的準備(schema、時間欄位、
 embedding)在另一個 repo [`course-data-prep`](#資料從哪裡來),產出一份 PostgreSQL 成品(`.sql.gz`)給這邊用。
-
-所以一般開發者**不需要 GPU、不需要下載 embedding 模型、也不用碰 course-data-prep** ——
-拿到成品檔就能跑。
 
 ## 需求
 
 - Docker(跑 PostgreSQL)
 - [`uv`](https://github.com/astral-sh/uv) 與 `python >= 3.13`(用到 PEP 702 的 `warnings.deprecated`)
-- [`ollama`](https://github.com/ollama/ollama) 或 Google AI API key
+- 一個 OpenAI 相容的 LLM 端點(LiteLLM proxy、Gemini、Ollama `/v1`…,寫法見 `.env.example`)
 
 ## 快速開始
 
 已經有課程資料成品(`.sql.gz`)的話:
 
 ```sh
-cp .env.example .env          # 至少要填 MODEL(用 ollama list 看有哪些)
+cp .env.example .env          # 至少要填 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL
 cp <某處拿到的>data.sql.gz db/init/
 
 docker compose up -d postgres # 首次啟動會自動還原 db/init/ 裡的成品
@@ -31,8 +26,14 @@ CLI 模式:`uv run python main.py`;用 Docker 跑 app:`docker compose --profile 
 
 > [!IMPORTANT]
 > **完整流程看 [docs/SETUP.md](docs/SETUP.md)** —— 資料準備的每一個步驟、各階段怎麼驗證、
-> 以及常見問題(換資料沒生效、容器連不到 Ollama、契約不符開不起來…)。
+> 以及常見問題(換資料沒生效、容器連不到 LLM、契約不符開不起來…)。
 > 沒有 `.sql.gz` 檔、或要重新產生一個學期的資料,請從那份開始看。
+
+
+# 架構
+
+<img width="984" height="559" alt="image" src="https://github.com/user-attachments/assets/c5ed59e0-442e-4a1b-b03f-e31e3102ca3b" />
+
 
 ## 檢索怎麼做的
 
@@ -122,8 +123,8 @@ uv run python -m tests.test_user_profile
 
 ## 前端
 
-**[CourseLangGraph-frontend](https://github.com/NCCUCourseScheduling/CourseLangGraph-frontend)**
+**[CourseLangChain-frontend](https://github.com/NCCU-AI-System/CourseLangChain-frontend)**
 
-## Final Report
+## Report
 
-[report](https://docs.google.com/document/d/1CkelC_x8B_QnVHEiIZisG1d8BJwXoYg02lqaqgbQlFY/edit?usp=sharing)
+[report](https://docs.google.com/document/d/1hH0jlfn79adLXgyjeiVMhIZCQxVbqo9Zi4HFuDOKfxo/edit?usp=sharing)

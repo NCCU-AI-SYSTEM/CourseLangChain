@@ -49,6 +49,17 @@ formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(messag
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+# handler 掛在 root 上,不是只掛給 CourseLangGraph —— tools/ 與 harness/ 用的是
+# getLogger(__name__),只設定 CourseLangGraph 的話它們的 INFO 全部無聲消失。
+# text_to_sql 記錄「送出什麼、收回什麼」正是要靠這個才看得到。
+root = logging.getLogger()
+if not root.handlers:
+    root.addHandler(ch)
+root.setLevel(logging.INFO)
+
+# httpx 每發一個請求就 INFO 一行,開了 root 之後會把真正的訊息淹掉。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 # on_tool_start 時送給前端的進度文字。刻意做成「工具名 → 人話」的對照表:
 # 工具名不外流,前端只拿到可以直接顯示的句子,也就不必跟著後端的工具清單一起改。

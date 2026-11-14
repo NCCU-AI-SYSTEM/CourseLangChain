@@ -114,4 +114,12 @@ def parse_timefilter_from_json(json_str: str) -> TimeFilter:
     for key in ("lang", "kind", "point_min", "point_max", "unit"):
         if key in data:
             kwargs[key] = data[key]
+
+    # 模型常把沒問到的可選欄位填成 0 / "" / null 一併回傳。空字串靠
+    # constraints_to_where 的 truthy 檢查就擋掉了,但 kind 用的是 `is not None`,
+    # 所以 kind=0 會變成真的 `AND kind = 0` —— 而 0 在資料裡存在(115-1 有 46 門),
+    # 於是「晚上的課」從 294 門悄悄變成 6 門,沒有任何錯誤訊息。
+    if kwargs.get("kind") not in (1, 2, 3, 4):
+        kwargs.pop("kind", None)
+
     return TimeFilter(**kwargs)
