@@ -86,6 +86,117 @@ def test_trim_no_orphan_tool_message() -> None:
     check(not orphans, "視窗內沒有對不到 tool_call 的 ToolMessage")
 
 
+def test_patch_interrupted_tool_calls() -> None:
+    print("[中斷留下的工具呼叫缺口:送進模型前補上]")
+    from langgraph.prebuilt.chat_agent_executor import _validate_chat_history
+
+    from agents.brain_agent import INTERRUPTED_TOOL_RESULT, _patch_interrupted_tool_calls
+
+    broken = [
+        HumanMessage(content="推薦星期三以外的課"),
+        AIMessage(content="", tool_calls=[
+            {"name": "retrieve_tool", "args": {"keyword": "AI"}, "id": "c1"},
+            {"name": "text_to_sql_tool", "args": {}, "id": "c2"},
+        ]),
+        ToolMessage(content="結果", tool_call_id="c2"),  # 平行呼叫只回來一個
+        HumanMessage(content="你好"),
+    ]
+    patched = _patch_interrupted_tool_calls(broken)
+    try:
+        _validate_chat_history(patched)
+        valid = True
+    except ValueError:
+        valid = False
+    check(valid, "補過的歷史通過 LangGraph 自己的檢查(INVALID_CHAT_HISTORY 不再發生)")
+    added = [m for m in patched if isinstance(m, ToolMessage) and m.content == INTERRUPTED_TOOL_RESULT]
+    check(len(added) == 1 and added[0].tool_call_id == "c1", "只補缺的那一個,已有結果的不重複補")
+    check(patched.index(added[0]) == 2, "補在那則 AIMessage 的正後方")
+
+    normal = [
+        HumanMessage(content="q"),
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "c1"}]),
+        ToolMessage(content="r", tool_call_id="c1"),
+        AIMessage(content="答"),
+    ]
+    check(_patch_interrupted_tool_calls(normal) is normal, "完整的歷史原樣通過,不多補")
+
+
+def test_cancel_mid_tool_then_ask_again() -> None:
+    """重現 2026-11-02 docker 上的事故:工具跑到一半被取消,同一個 session 之後每題都失敗。"""
+    print("[工具執行中被取消後,同一個 session 還能繼續問]")
+    import asyncio
+
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.prebuilt import create_react_agent
+
+    from agents.brain_agent import _trim_history
+
+    class Scripted(BaseChatModel):
+        """第一次呼叫工具,之後都直接回答。"""
+
+        calls: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "scripted"
+
+        def bind_tools(self, *_a, **_k):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                msg = AIMessage(content="", tool_calls=[{"name": "slow_tool", "args": {"q": "x"}, "id": "c1"}])
+            else:
+                msg = AIMessage(content="你好!")
+            return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    @tool
+    async def slow_tool(q: str) -> str:
+        """很慢的工具(模擬第一次查詢在載入 embedding 模型)。"""
+        await asyncio.sleep(30)
+        return "結果"
+
+    def run(hook) -> str:
+        graph = create_react_agent(
+            model=Scripted(), tools=[slow_tool], pre_model_hook=hook, checkpointer=InMemorySaver()
+        )
+        cfg = {"configurable": {"thread_id": "s1"}}
+
+        async def scenario() -> str:
+            async def first_turn():
+                async for ev in graph.astream_events(
+                    {"messages": [HumanMessage(content="查課")]}, config=cfg, version="v2"
+                ):
+                    if ev["event"] == "on_tool_start":
+                        tool_started.set()
+
+            tool_started = asyncio.Event()
+            task = asyncio.create_task(first_turn())
+            await tool_started.wait()
+            task.cancel()  # 使用者重新整理頁面:app.py 的 pump.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            try:
+                out = await graph.ainvoke({"messages": [HumanMessage(content="你好")]}, config=cfg)
+                return out["messages"][-1].content
+            except ValueError as e:
+                return f"ValueError: {str(e)[:40]}"
+
+        return asyncio.run(scenario())
+
+    # 對照組:沒有修補時真的會壞(證明這個測試重現得出事故)
+    control = run(lambda state: {"llm_input_messages": state["messages"]})
+    check(control.startswith("ValueError"), f"對照組(不修補)重現 INVALID_CHAT_HISTORY(實際:{control!r})")
+    out = run(_trim_history)
+    check(out == "你好!", f"有修補時,下一題正常回答(實際:{out!r})")
+
+
 def test_brain_agent_has_checkpointer() -> None:
     print("[brain_agent 已掛 checkpointer]")
     from agents.brain_agent import brain_agent
@@ -176,6 +287,8 @@ if __name__ == "__main__":
     test_trim_keeps_recent()
     test_trim_short_history_untouched()
     test_trim_no_orphan_tool_message()
+    test_patch_interrupted_tool_calls()
+    test_cancel_mid_tool_then_ask_again()
     test_brain_agent_has_checkpointer()
     test_memory_across_turns()
     test_ephemeral_thread_id_when_missing()

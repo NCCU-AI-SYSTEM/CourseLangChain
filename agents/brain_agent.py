@@ -1,6 +1,7 @@
+import logging
 import os
 
-from langchain_core.messages import SystemMessage, trim_messages
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage, trim_messages
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
@@ -16,6 +17,8 @@ from tools.text_to_sql import text_to_sql_tool
 from tools.user_profile import user_profile_tool
 
 from utils.llm import get_chat_llm
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -223,11 +226,58 @@ def _get_chat_llm():
 MAX_HISTORY_MESSAGES = 40
 
 
+INTERRUPTED_TOOL_RESULT = (
+    "ERROR: 這次工具呼叫在上一輪被中斷(使用者離開頁面或處理逾時),沒有結果。"
+    "不要引用它;如果這一輪還需要這份資料,請重新呼叫工具。"
+)
+
+
+def _patch_interrupted_tool_calls(messages: list) -> list:
+    """替「沒有對應 ToolMessage 的 tool_call」補上一則中斷說明。
+
+    串流中途被取消(使用者重新整理、關分頁、逾時)時,若剛好停在「模型已決定呼叫
+    工具、工具還沒跑完」之間,checkpointer 會留下一則只有 tool_calls 的 AIMessage。
+    LangGraph 送進模型前會檢查每個 tool_call 都有結果,缺了就 raise
+    INVALID_CHAT_HISTORY —— 而 session_id 在同一分頁重新整理後沿用,
+    於是這個 session 之後每一題都失敗,直到關掉分頁。
+
+    正常的 ReAct 流程裡,模型被呼叫時所有工具都已經跑完,所以會被補的只有中斷留下的缺口。
+    補在那則 AIMessage 的正後方,順序才符合 provider 的要求。
+    """
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    if all(
+        tc["id"] in answered
+        for m in messages
+        if isinstance(m, AIMessage)
+        for tc in m.tool_calls or []
+    ):
+        return messages
+
+    patched: list = []
+    for m in messages:
+        patched.append(m)
+        if isinstance(m, AIMessage):
+            for tc in m.tool_calls or []:
+                if tc["id"] not in answered:
+                    logger.warning("補上被中斷的工具呼叫結果:%s(%s)", tc.get("name"), tc["id"])
+                    patched.append(
+                        ToolMessage(
+                            content=INTERRUPTED_TOOL_RESULT,
+                            tool_call_id=tc["id"],
+                            name=tc.get("name"),
+                        )
+                    )
+    return patched
+
+
 def _trim_history(state: dict) -> dict:
     """pre_model_hook:只裁「送進 LLM 的」訊息,不動 checkpointer 存的完整歷史。
 
     回傳 `llm_input_messages` 而非 `messages`,是為了不覆寫 state——
     完整對話仍留在 checkpointer 裡,只有本次餵給模型的視窗被裁短。
+
+    也在這裡修補中斷留下的工具呼叫缺口(見 `_patch_interrupted_tool_calls`):
+    有 pre_model_hook 時,LangGraph 檢查的是這裡回傳的 `llm_input_messages`。
     """
     trimmed = trim_messages(
         state["messages"],
@@ -241,7 +291,7 @@ def _trim_history(state: dict) -> dict:
         include_system=False,
         allow_partial=False,
     )
-    return {"llm_input_messages": trimmed}
+    return {"llm_input_messages": _patch_interrupted_tool_calls(trimmed)}
 
 
 def build_brain_agent():
