@@ -7,7 +7,8 @@ import json
 import os
 from dotenv import load_dotenv
 
-from tools import course_info, session_moodle, session_profile, session_schedule
+from tools import (course_info, preference_order, preference_survival, session_moodle,
+                   session_profile, session_schedule)
 from tools.mcp_tools import moodle_enabled, verify_moodle_login
 
 from langfuse import get_client
@@ -219,6 +220,84 @@ async def get_course(course_id: str):
     if card is None:
         raise HTTPException(status_code=404, detail=f"找不到課程代碼 {course_id}")
     return card
+
+
+# 一次最多查幾門課的選上機率;志願序清單實務上不會超過這個數
+_MAX_CHANCE_ITEMS = 100
+
+
+@app.post("/api/preference/chances")
+async def preference_chances(payload: dict = Body(...)):
+    """志願序清單用:每門課排在第 rank 志願時的選上機率(官方分發結果的存活分析)。
+
+    `items: [{course_id, time, rank}]`,rank 是清單裡的名次(第幾志願),不是填的數字 ——
+    政大會把填的數字重新編成第 1、2、3…志願。不經 LLM,方法見 tools/preference_survival.py。
+
+    沒有官方歷史的課(必修、選修、新開或改時段的班次)回 `available: false`,不給數字。
+    """
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items 必須是陣列")
+    if len(items) > _MAX_CHANCE_ITEMS:
+        raise HTTPException(status_code=400, detail=f"一次最多 {_MAX_CHANCE_ITEMS} 門課")
+
+    model = preference_survival.get_model(preference_order.OFFICIAL_JSONL)
+    results = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="items 的每一筆必須是物件")
+        course_id = str(item.get("course_id") or "")
+        try:
+            rank = int(item.get("rank"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="rank 必須是整數") from None
+        chance = model.chance(course_id, item.get("time"), rank)
+        if chance is None:
+            results.append({"course_id": course_id, "rank": rank, "available": False})
+            continue
+        results.append({
+            "course_id": course_id,
+            "rank": rank,
+            "available": True,
+            "probability": round(chance.probability, 4),
+            "label": preference_survival.describe(chance.probability),
+            "terms": len(chance.history),
+            "full_terms": chance.full_terms,
+            "strictest": chance.strictest,
+            "validated": chance.validated,
+        })
+    return {"items": results}
+
+
+@app.post("/api/preference/optimize")
+async def preference_optimize(payload: dict = Body(...)):
+    """志願序建議:期望選上門數最大的排法(通識逐門相加、體育最多算一門)。
+
+    `items: [{course_id, time}]` 依目前清單順序(第 1、2、3…志願)。沒有官方資料的課位置不動。
+    只回建議,由使用者決定要不要套用 —— 清單的順序同時代表「最想上哪一門」,那是機率看不到的。
+    """
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="items 必須是非空陣列")
+    if len(items) > _MAX_CHANCE_ITEMS:
+        raise HTTPException(status_code=400, detail=f"一次最多 {_MAX_CHANCE_ITEMS} 門課")
+    pairs: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="items 的每一筆必須是物件")
+        pairs.append((str(item.get("course_id") or ""), str(item.get("time") or "")))
+
+    model = preference_survival.get_model(preference_order.OFFICIAL_JSONL)
+    # 8 門以內窮舉 40,320 種排法,放到 thread 裡算,別卡住其他請求
+    plan = await asyncio.to_thread(preference_survival.optimize_order, model, pairs)
+    return {
+        "order": [pairs[i][0] for i in plan.order],
+        "before": round(plan.before, 4),
+        "after": round(plan.after, 4),
+        "changed": plan.changed,
+        "exact": plan.exact,
+        "pinned": [pairs[i][0] for i in plan.pinned],
+    }
 
 
 @app.get("/api/schedule")

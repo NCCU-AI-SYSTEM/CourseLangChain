@@ -53,7 +53,7 @@ flowchart LR
 | 看單一門課的課綱 | `course_detail_tool` | [`tools/course_detail.py`](../tools/course_detail.py) |
 | 排課表（不衝堂、學分達標） | `schedule_tool` | [`tools/schedule_tool.py`](../tools/schedule_tool.py)、[`tools/scheduler.py`](../tools/scheduler.py) |
 | 讀寫右側課表面板 | `my_schedule_tool` | [`tools/my_schedule.py`](../tools/my_schedule.py)、[`tools/session_schedule.py`](../tools/session_schedule.py) |
-| 志願序要排第幾 | `preference_order_tool` | [`tools/preference_order.py`](../tools/preference_order.py)，資料在 [`data/`](../data/) |
+| 志願序要排第幾、選上機率 | `preference_order_tool` | [`tools/preference_order.py`](../tools/preference_order.py)、[`tools/preference_survival.py`](../tools/preference_survival.py)（存活分析），資料在 [`data/`](../data/) |
 | 讀成績單（去識別化） | `user_profile_tool` | [`tools/user_profile.py`](../tools/user_profile.py)、[`tools/transcript_parser.py`](../tools/transcript_parser.py) |
 | Moodle 作業、成績、公告 | 由 MCP server 提供 | [`tools/mcp_tools.py`](../tools/mcp_tools.py)、[`tools/session_moodle.py`](../tools/session_moodle.py) |
 | 課程卡片（前端點開的詳細資料） | 不經模型，REST API | [`tools/course_info.py`](../tools/course_info.py) |
@@ -110,6 +110,8 @@ contract.yaml  資料契約（從 CourseDataPrep 原樣複製，不要在這裡�
 | `GET /api/courses/{course_id}` | 課程卡片 |
 | `GET` / `POST` / `DELETE /api/schedule` | 課表面板的查看、加課、移除 |
 | `POST /api/schedule/apply` | 一鍵套用排課方案 |
+| `POST /api/preference/chances` | 志願序清單每門課排第 k 志願的選上機率（沒有官方資料的課回 `available: false`） |
+| `POST /api/preference/optimize` | 建議排序：期望選上門數最大的排法（通識逐門相加、體育最多算一門；沒有官方資料的課位置不動） |
 | `GET` / `POST` / `DELETE /api/profile` | 成績單（只存在記憶體） |
 | `GET` / `POST` / `DELETE /api/moodle` | Moodle 登入狀態 |
 
