@@ -212,6 +212,11 @@ class CourseLangGraph:
         ):
             kind = event.get("event")
             if kind == "on_chat_model_end":
+                # 工具內部的 LLM 呼叫(例如 text_to_sql 解析時間條件回的
+                # {"include_times": ...})也會以這個事件冒上來,而且沒有 tool_calls,
+                # 下面的判斷擋不住。它們的節點是 "tools";只收 ReAct 主迴圈("agent")。
+                if (event.get("metadata") or {}).get("langgraph_node") != "agent":
+                    continue
                 # 只送「最終答案」那一則。ReAct 迴圈裡每一次 LLM 呼叫都會產生文字,
                 # 但帶 tool_calls 的那些是過程,不該進畫面 —— 小模型常把工具呼叫
                 # 寫成 ```json {"name": ...} 這種文字,先前會原樣顯示給使用者。
